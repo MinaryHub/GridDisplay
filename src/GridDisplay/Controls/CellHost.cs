@@ -17,16 +17,45 @@ namespace GridDisplay.Controls;
 /// </summary>
 public sealed class CellHost : Panel
 {
+    /// <summary>WebView2 rejects factors outside this range.</summary>
+    private const double MinZoom = 0.25;
+    private const double MaxZoom = 4.0;
+
+    /// <summary>
+    /// One keep-alive pulse. The two logout mechanisms are independent and both need answering:
+    /// synthetic activity events reset a page's own idle timer, and a credentialed no-store
+    /// request stops the server-side session from expiring. Events go to <c>body</c> so they
+    /// bubble on to <c>document</c> and <c>window</c> — idle detectors listen on all three.
+    /// Deliberately no mousedown/click: those would fire the page's own buttons.
+    /// </summary>
+    private const string KeepAliveScript = """
+        (function () {
+          var t = document.body || document.documentElement;
+          if (!t) return;
+          t.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 1, clientY: 1 }));
+          t.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Shift' }));
+          t.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Shift' }));
+          try {
+            fetch(location.href, { method: 'HEAD', cache: 'no-store', credentials: 'include' });
+          } catch (e) { }
+        })();
+        """;
+
     private readonly Label _placeholder;
+    private readonly System.Windows.Forms.Timer _keepAlive = new();
     private WebView2? _web;
     private NativeAppHost? _native;
     private CancellationTokenSource? _cts;
     private bool _webReady;
     private bool _suspended;
+    private int _fitReference;
+    private double _appliedZoom;
+    private int _index;
+    private bool _keepAliveActive = true;
 
     public CellHost(int index, CellConfig config)
     {
-        Index = index;
+        _index = index;
         Config = config;
         DoubleBuffered = true;
         BackColor = Color.FromArgb(24, 24, 27);
@@ -43,11 +72,28 @@ public sealed class CellHost : Panel
             Text = string.Empty,
         };
         Controls.Add(_placeholder);
+
+        _keepAlive.Tick += (_, _) => PulseKeepAlive();
     }
 
-    public int Index { get; }
+    /// <summary>
+    /// Position in the grid. Reassigned when cells are dragged into a new order — the hosts are
+    /// swapped rather than their content, so the number on an empty cell has to follow.
+    /// </summary>
+    public int Index
+    {
+        get => _index;
+        set
+        {
+            if (_index == value) return;
+            _index = value;
+            if (Config.Kind == CellKind.Empty) StatusText = EmptyText;
+        }
+    }
 
     public CellConfig Config { get; private set; }
+
+    private string EmptyText => $"[{Index + 1}] 비어 있음\n클릭하여 설정";
 
     /// <summary>Raised when the hosted content changes something worth persisting (URL, title).</summary>
     public event Action<CellHost>? StateChanged;
@@ -88,7 +134,7 @@ public sealed class CellHost : Panel
                 break;
 
             default:
-                StatusText = $"[{Index + 1}] 비어 있음\n클릭하여 설정";
+                StatusText = EmptyText;
                 break;
         }
     }
@@ -157,7 +203,9 @@ public sealed class CellHost : Panel
         };
 
         _webReady = true;
-        try { view.ZoomFactor = config.ZoomFactor <= 0 ? 1.0 : config.ZoomFactor; } catch { }
+        _appliedZoom = 0;
+        ApplyZoom();
+        SyncKeepAlive();
 
         Navigate(config.Url);
         StatusText = string.Empty;
@@ -216,6 +264,76 @@ public sealed class CellHost : Panel
         return "https://" + url;
     }
 
+    /// <summary>
+    /// Width the "fit to cell" zoom is measured against — the width this cell takes when zoomed to
+    /// the whole grid area. A cell holding a third of that width then renders the identical page
+    /// layout at a third of the scale, and a zoomed cell lands on exactly 1.0, so zooming in and
+    /// back out changes only the scale and never reflows the page.
+    /// </summary>
+    public void SetFitReference(int referenceWidth)
+    {
+        _fitReference = referenceWidth;
+        ApplyZoom();
+    }
+
+    private double TargetZoom()
+    {
+        if (!Config.FitToCell) return Config.ZoomFactor <= 0 ? 1.0 : Config.ZoomFactor;
+        int width = ClientSize.Width;
+        if (_fitReference <= 0 || width <= 0) return 1.0;
+        return Math.Clamp((double)width / _fitReference, MinZoom, MaxZoom);
+    }
+
+    private void ApplyZoom()
+    {
+        if (_web is null || !_webReady) return;
+        double target = TargetZoom();
+        // Assigning ZoomFactor relays out the page, and every resize step calls in here, so push
+        // only real changes. 0 is the "nothing applied yet" sentinel — no valid factor reaches it.
+        if (Math.Abs(target - _appliedZoom) < 0.0005) return;
+        _appliedZoom = target;
+        try { _web.ZoomFactor = target; } catch { }
+    }
+
+    protected override void OnResize(EventArgs e)
+    {
+        base.OnResize(e);
+        ApplyZoom();
+    }
+
+    /// <summary>
+    /// Keep-alive runs in view mode only. While the hosted app has the input (F2) the user is
+    /// generating real activity anyway, and synthetic key events would collide with typing.
+    /// </summary>
+    public void SetKeepAliveActive(bool active)
+    {
+        if (_keepAliveActive == active) return;
+        _keepAliveActive = active;
+        SyncKeepAlive();
+    }
+
+    private void SyncKeepAlive()
+    {
+        bool on = _keepAliveActive && _webReady && _web is not null
+                  && Config.Kind == CellKind.Browser && Config.PreventLogout;
+        if (!on)
+        {
+            _keepAlive.Stop();
+            return;
+        }
+
+        int interval = Math.Clamp(Config.KeepAliveSeconds <= 0 ? 60 : Config.KeepAliveSeconds, 10, 3600) * 1000;
+        if (_keepAlive.Interval != interval) _keepAlive.Interval = interval;
+        if (!_keepAlive.Enabled) _keepAlive.Start();
+    }
+
+    private void PulseKeepAlive()
+    {
+        if (_web is null || !_webReady || _suspended) return;
+        try { _ = _web.CoreWebView2.ExecuteScriptAsync(KeepAliveScript); }
+        catch { }
+    }
+
     public void Reload()
     {
         if (_web is not null && _webReady)
@@ -241,6 +359,9 @@ public sealed class CellHost : Panel
     /// </summary>
     public void SetSuspended(bool suspend)
     {
+        // A cell asked to stay signed in must stay running — suspending it is exactly the idleness
+        // the keep-alive exists to prevent.
+        if (suspend && Config.PreventLogout) return;
         if (_web is null || !_webReady || suspend == _suspended) return;
         _suspended = suspend;
         try
@@ -253,11 +374,13 @@ public sealed class CellHost : Panel
 
     public void Release()
     {
+        _keepAlive.Stop();
         _cts?.Cancel();
         _cts?.Dispose();
         _cts = null;
         _webReady = false;
         _suspended = false;
+        _appliedZoom = 0;
         LiveTitle = string.Empty;
 
         if (_native is not null)
@@ -281,7 +404,11 @@ public sealed class CellHost : Panel
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) Release();
+        if (disposing)
+        {
+            Release();
+            _keepAlive.Dispose();
+        }
         base.Dispose(disposing);
     }
 }

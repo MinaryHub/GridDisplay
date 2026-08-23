@@ -82,6 +82,42 @@ writes atomically (temp file + `File.Move` overwrite) because navigation events 
 gaps. Hover/selection outlines are painted by the form into the inter-cell gap — the form cannot
 paint over child windows, so `AppState.CellGap` must stay > 0 for those outlines to be visible.
 
+**Browser zoom is derived, not stored.** `CellConfig.FitToCell` (on by default) makes `CellHost`
+compute `ZoomFactor` as its own width over the *grid area* width, so a cell shows the page laid
+out for the full monitor, only smaller — at 100% a cell would show just the page's top-left
+corner. Measuring against the grid area rather than a fixed width is what makes a zoomed cell
+land on exactly 1.0, so zoom/unzoom rescales without reflowing the page. `Relayout` pushes the
+reference width into every cell and `CellHost.OnResize` reapplies; the stored `ZoomFactor` is
+only consulted when `FitToCell` is off.
+
+**Rearranging is a host swap, not a content move.** Dragging one cell onto another runs
+`MainForm.SwapCells`, which exchanges entries in `_cells` *and* `GridPreset.Cells` together and
+reassigns `CellHost.Index`. The hosts keep their WebView2 / reparented window and only get new
+bounds from `Relayout`, so a rearrange never reloads a cell — same trade as zooming. Moving the
+*configs* between hosts instead would restart both cells and break the aliasing that records
+live URLs. Two consequences worth remembering: `_cells[i].Config` must stay reference-equal to
+`_preset.Cells[i]`, and `CellHost.Index` cannot be readonly because an empty cell paints its own
+position number.
+
+**Keep-alive answers two independent logout mechanisms.** `CellConfig.PreventLogout` (off by
+default) starts a per-cell timer in `CellHost` that runs `KeepAliveScript`: synthetic activity
+events reset a page's *client-side* idle timer, and a credentialed `cache: 'no-store'` request
+stops the *server-side* session from expiring. Dropping either half leaves one of the two causes
+unhandled. Details that are deliberate, not incidental: events are dispatched on `body` so they
+bubble on to `document` and `window` (idle detectors listen on all three); there is no
+`mousedown`/`click` in the list, because those would fire the page's own buttons; and
+`SetSuspended` refuses to suspend a keep-alive cell, since that idleness is the very thing being
+prevented. It runs in view mode only — `MainForm.SetInteractive` calls `SetKeepAliveActive`, as
+input mode already carries real activity and synthetic keys would land in the user's typing.
+Known limits: the events are `isTrusted: false`, so a site that checks that is not fooled, and
+`ExecuteScriptAsync` reaches the main frame only, so a dashboard inside an iframe is not covered.
+
+The drag itself goes through `InputHook`, not WinForms drag-and-drop — hosted windows belong to
+other processes and eat the input first, the same reason the hooks exist. `OnGlobalMouseMove`
+promotes a left press past `DragThreshold` into a drag; `OnGlobalMouseUp` swallows the release so
+it never turns into a zoom. Feedback is limited to dashed-source / solid-target cell frames,
+because the gap between cells is the only surface the form can paint on.
+
 **Responsiveness choices**, worth preserving:
 
 - Cell content starts staggered (120ms apart) in `LoadPresetAsync`, after the window is already
@@ -102,5 +138,12 @@ for consistency.
 ## Conventions
 
 - UI strings and user-facing messages are Korean; code, comments and identifiers are English.
+- The app runs `ApplicationHighDpiMode=PerMonitorV2`, so fonts scale with the monitor but
+  hard-coded pixel bounds do not. `MainForm.LayoutBar` therefore positions the toolbar from
+  measured text times `MainForm.Scaled(...)` on every relayout, and `CellSettingsForm` authors
+  every coordinate at 96 DPI and wraps it in its own `S(...)`. Copy one of those. `PresetManagerForm`
+  is still raw pixels and clips at 150% — convert it the same way when touching it, rather than
+  nudging magic numbers. Rows of side-by-side controls (the kind radios) additionally advance by
+  `PreferredSize.Width` so a long caption cannot cover the next control's glyph.
 - Cell failures are reported inside the cell (`CellHost.StatusText`), never as a message box or
   an exception that reaches the message loop — one broken cell must not take down the wall.

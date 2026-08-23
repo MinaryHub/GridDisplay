@@ -28,6 +28,9 @@ public sealed class MainForm : Form
 
     private readonly Panel _bar = new();
     private readonly ComboBox _presetCombo = new();
+    private readonly NumericUpDown _colsSpin = new() { Minimum = 1, Maximum = 12, Value = 3 };
+    private readonly NumericUpDown _rowsSpin = new() { Minimum = 1, Maximum = 12, Value = 2 };
+    private readonly System.Windows.Forms.Timer _gridResizeDebounce = new();
     private readonly Label _banner = new();
     private readonly System.Windows.Forms.Timer _bannerTimer = new();
     private readonly ContextMenuStrip _menu = new();
@@ -40,11 +43,17 @@ public sealed class MainForm : Form
     private int _hover = -1;
     private int _pressedCell = -1;
     private int _menuCell = -1;
+    private int _dragFrom = -1;
+    private int _dragOver = -1;
+    private Point _pressPoint;
+    private MouseButtons _pressButton;
     private bool _interactive;
     private bool _fullScreen;
     private bool _barVisible;
     private bool _closing;
     private bool _suppressCombo;
+    private bool _suppressGridSpin;
+    private Control[] _barItems = Array.Empty<Control>();
     private long _lastHoverTick;
 
     private Rectangle _restoreBounds;
@@ -128,6 +137,7 @@ public sealed class MainForm : Form
         Relayout();
         Invalidate();
         UpdatePresetCombo();
+        UpdateGridSpin();
         UpdateTitle();
         _store.SaveDeferred();
 
@@ -165,6 +175,7 @@ public sealed class MainForm : Form
     {
         if (_cells.Count == 0 || _preset is null) return;
 
+        LayoutBar();
         var area = GridArea();
         int gap = Math.Max(0, S.CellGap);
 
@@ -202,6 +213,10 @@ public sealed class MainForm : Form
             }
         }
 
+        // Fit zoom is cell width measured against the full grid area, so it has to be refreshed
+        // wherever cells move: zooming a cell, toggling the toolbar, resizing the window.
+        foreach (var cell in _cells) cell.SetFitReference(area.Width);
+
         _bar.Bounds = new Rectangle(0, 0, ClientSize.Width, _bar.Height);
         if (_barVisible) _bar.BringToFront();
         PositionBanner();
@@ -216,11 +231,20 @@ public sealed class MainForm : Form
         using var idle = new Pen(Color.FromArgb(42, 42, 48), 1);
         using var selected = new Pen(Color.FromArgb(120, 120, 135), 2);
         using var hovered = new Pen(AccentColor, 3);
+        // Drag feedback lives in the frames because the form cannot paint over child windows —
+        // the gap between cells is the only canvas it owns.
+        using var dropTarget = new Pen(Color.FromArgb(110, 210, 140), 3);
+        using var dragSource = new Pen(Color.FromArgb(110, 210, 140), 2)
+        {
+            DashStyle = System.Drawing.Drawing2D.DashStyle.Dash,
+        };
 
         for (int i = 0; i < _cells.Count; i++)
         {
             if (!_cells[i].Visible) continue;
-            var pen = i == _hover ? hovered : i == _selected ? selected : idle;
+            var pen = _dragFrom >= 0
+                ? i == _dragOver && i != _dragFrom ? dropTarget : i == _dragFrom ? dragSource : idle
+                : i == _hover ? hovered : i == _selected ? selected : idle;
             int inflate = (int)Math.Ceiling(pen.Width / 2f);
             var r = Rectangle.Inflate(_cells[i].Bounds, inflate, inflate);
             e.Graphics.DrawRectangle(pen, r.Left, r.Top, r.Width - 1, r.Height - 1);
@@ -256,6 +280,8 @@ public sealed class MainForm : Form
         int index = CellIndexAtScreen(screen);
         if (index < 0) return false;
         _pressedCell = index;
+        _pressPoint = screen;
+        _pressButton = button;
         return true;
     }
 
@@ -265,6 +291,22 @@ public sealed class MainForm : Form
         int index = CellIndexAtScreen(screen);
         int pressed = _pressedCell;
         _pressedCell = -1;
+
+        // Reset the drag synchronously: the hook can fire again before BeginInvoke runs.
+        int from = _dragFrom, over = _dragOver;
+        _dragFrom = -1;
+        _dragOver = -1;
+        if (from >= 0)
+        {
+            BeginInvoke(() =>
+            {
+                InvalidateCellFrame(from);
+                InvalidateCellFrame(over);
+                if (index >= 0 && index != from) SwapCells(from, index);
+            });
+            return true;
+        }
+
         if (index < 0) return false;
         if (pressed != index) return true;
 
@@ -286,6 +328,37 @@ public sealed class MainForm : Form
         _lastHoverTick = now;
 
         int index = CellIndexAtScreen(screen);
+
+        // A left press that travels far enough becomes a cell drag. WinForms drag-and-drop is not
+        // an option here: the hosted windows belong to other processes and consume the input
+        // before any managed control sees it, which is why the hooks exist in the first place.
+        if (_dragFrom < 0 && _pressedCell >= 0 && _pressButton == MouseButtons.Left &&
+            _preset is not null && _pressedCell < _preset.Cells.Count &&
+            _preset.Cells[_pressedCell].IsConfigured &&
+            (Math.Abs(screen.X - _pressPoint.X) >= DragThreshold ||
+             Math.Abs(screen.Y - _pressPoint.Y) >= DragThreshold))
+        {
+            _dragFrom = _pressedCell;
+            int stale = _hover;
+            _hover = -1;
+            BeginInvoke(() => InvalidateCellFrame(stale));
+        }
+
+        if (_dragFrom >= 0)
+        {
+            if (index == _dragOver) return;
+            int previousTarget = _dragOver;
+            _dragOver = index;
+            int source = _dragFrom;
+            BeginInvoke(() =>
+            {
+                InvalidateCellFrame(previousTarget);
+                InvalidateCellFrame(index);
+                InvalidateCellFrame(source);
+            });
+            return;
+        }
+
         if (index == _hover) return;
         int previous = _hover;
         _hover = index;
@@ -324,6 +397,19 @@ public sealed class MainForm : Form
         switch (key)
         {
             case Keys.Escape:
+                if (_dragFrom >= 0)
+                {
+                    int from = _dragFrom, over = _dragOver;
+                    _dragFrom = -1;
+                    _dragOver = -1;
+                    _pressedCell = -1;
+                    BeginInvoke(() =>
+                    {
+                        InvalidateCellFrame(from);
+                        InvalidateCellFrame(over);
+                    });
+                    return true;
+                }
                 if (_zoomed >= 0)
                 {
                     int z = _zoomed;
@@ -422,6 +508,33 @@ public sealed class MainForm : Form
         ToggleZoom(index);
     }
 
+    private int DragThreshold => Math.Max(SystemInformation.DragSize.Width, Scaled(6));
+
+    /// <summary>
+    /// Exchange two cells' places. The hosts are swapped rather than their content: a reparented
+    /// window or a live WebView2 only gets new bounds, so rearranging never reloads a cell — the
+    /// same trade zooming already makes. Both lists move together to keep
+    /// <c>_cells[i].Config</c> and <c>_preset.Cells[i]</c> the same object.
+    /// </summary>
+    private void SwapCells(int a, int b)
+    {
+        if (_preset is null || a == b) return;
+        if (a < 0 || b < 0 || a >= _cells.Count || b >= _cells.Count) return;
+
+        (_cells[a], _cells[b]) = (_cells[b], _cells[a]);
+        (_preset.Cells[a], _preset.Cells[b]) = (_preset.Cells[b], _preset.Cells[a]);
+        _cells[a].Index = a;
+        _cells[b].Index = b;
+
+        _selected = b;
+        _hover = -1;
+        _store.SaveDeferred();
+        Relayout();
+        Invalidate();
+        UpdateTitle();
+        ShowBanner($"셀 {a + 1} ↔ {b + 1} 자리 교환");
+    }
+
     private void ToggleZoom(int index)
     {
         if (index < 0 || index >= _cells.Count) return;
@@ -460,6 +573,10 @@ public sealed class MainForm : Form
 
         _interactive = on;
         _hook.MouseCaptureEnabled = !on;
+
+        // Keep-alive is a view-mode concept: in input mode the user's own activity holds the
+        // session open, and synthetic key events would land in whatever they are typing.
+        foreach (var cell in _cells) cell.SetKeepAliveActive(!on);
 
         if (on)
         {
@@ -508,12 +625,10 @@ public sealed class MainForm : Form
 
     private void BuildBar()
     {
-        _bar.Height = 40;
         _bar.BackColor = Color.FromArgb(28, 28, 33);
         _bar.Visible = false;
 
         _presetCombo.DropDownStyle = ComboBoxStyle.DropDownList;
-        _presetCombo.Bounds = new Rectangle(10, 8, 220, 24);
         _presetCombo.SelectedIndexChanged += (_, _) =>
         {
             if (_suppressCombo) return;
@@ -521,33 +636,88 @@ public sealed class MainForm : Form
             if (i >= 0 && i < S.Presets.Count && S.Presets[i].Id != _preset.Id)
                 _ = LoadPresetAsync(S.Presets[i]);
         };
-        _bar.Controls.Add(_presetCombo);
 
-        _bar.Controls.Add(BarButton("세트 관리…", 240, (_, _) => ManagePresets()));
-        _bar.Controls.Add(BarButton("셀 설정…", 348, (_, _) => EditCell(_selected)));
-        _bar.Controls.Add(BarButton("전체 화면", 440, (_, _) => SetFullScreen(!_fullScreen)));
+        _colsSpin.ValueChanged += (_, _) => QueueGridResize();
+        _rowsSpin.ValueChanged += (_, _) => QueueGridResize();
 
-        _bar.Controls.Add(new Label
+        // A resize rebuilds every cell, so committing on each spinner click would restart the
+        // wall three times on the way from 3 to 6 columns. Let the clicks settle first.
+        _gridResizeDebounce.Interval = 600;
+        _gridResizeDebounce.Tick += (_, _) =>
         {
-            Text = "F1 도구모음 · F2 입력 모드 · F11 전체 화면 · Ctrl+1~9 세트 · 우클릭 메뉴",
-            ForeColor = Color.FromArgb(150, 150, 160),
-            AutoSize = true,
-            Location = new Point(548, 13),
-        });
+            _gridResizeDebounce.Stop();
+            SetGridSize((int)_colsSpin.Value, (int)_rowsSpin.Value);
+        };
+
+        _barItems = new Control[]
+        {
+            _presetCombo,
+            BarButton("세트 관리…", (_, _) => ManagePresets()),
+            BarButton("셀 설정…", (_, _) => EditCell(_selected)),
+            BarButton("전체 화면", (_, _) => SetFullScreen(!_fullScreen)),
+            BarLabel("격자", Color.FromArgb(200, 200, 210)),
+            _colsSpin,
+            BarLabel("×", Color.FromArgb(200, 200, 210)),
+            _rowsSpin,
+            BarLabel("F1 도구모음 · F2 입력 모드 · F11 전체 화면 · Ctrl+1~9 세트 · 우클릭 메뉴",
+                Color.FromArgb(150, 150, 160)),
+        };
+        _bar.Controls.AddRange(_barItems);
 
         Controls.Add(_bar);
+        LayoutBar();
     }
 
-    private static Button BarButton(string text, int x, EventHandler onClick)
+    /// <summary>
+    /// Lay the bar out from measured text at the current DPI instead of fixed pixels. The project
+    /// runs PerMonitorV2, so fonts grow with the monitor's scaling while hard-coded bounds would
+    /// not — at 150% the button captions clip. Re-run on every relayout so a move to a monitor
+    /// with different scaling is picked up too.
+    /// </summary>
+    private void LayoutBar()
+    {
+        if (_barItems.Length == 0) return;
+
+        int pad = Scaled(10), gap = Scaled(8), height = Scaled(26);
+        _bar.Height = Scaled(40);
+        int x = pad;
+
+        foreach (var item in _barItems)
+        {
+            var size = item switch
+            {
+                ComboBox => new Size(Scaled(220), item.PreferredSize.Height),
+                // Wide enough for two digits next to the spin buttons at any scale.
+                NumericUpDown => new Size(Scaled(58), height),
+                // Measured text, not PreferredSize — a non-autosize Button reports a far wider
+                // preferred width and the row runs off the right edge.
+                Button b => new Size(TextRenderer.MeasureText(b.Text, b.Font).Width + Scaled(24), height),
+                _ => item.PreferredSize,
+            };
+            item.Bounds = new Rectangle(x, (_bar.Height - size.Height) / 2, size.Width, size.Height);
+            x += size.Width + gap;
+        }
+    }
+
+    private int Scaled(int logical) => (int)Math.Round(logical * DeviceDpi / 96.0);
+
+    private static Label BarLabel(string text, Color color) => new()
+    {
+        Text = text,
+        ForeColor = color,
+        AutoSize = true,
+    };
+
+    private static Button BarButton(string text, EventHandler onClick)
     {
         var b = new Button
         {
             Text = text,
-            Bounds = new Rectangle(x, 7, 100, 26),
             FlatStyle = FlatStyle.Flat,
             BackColor = Color.FromArgb(48, 48, 56),
             ForeColor = Color.White,
             TabStop = false,
+            AutoSize = false,
         };
         b.FlatAppearance.BorderSize = 0;
         b.Click += onClick;
@@ -607,6 +777,7 @@ public sealed class MainForm : Form
         _menu.Items.Add("셀 다시 시작", null, (_, _) => RestartCell(_menuCell));
         _menu.Items.Add("셀 비우기", null, (_, _) => ClearCell(_menuCell));
         _menu.Items.Add(new ToolStripSeparator());
+        _menu.Items.Add(BuildGridSizeMenu());
         _menu.Items.Add("세트 관리…", null, (_, _) => ManagePresets());
         _menu.Items.Add("현재 배치를 새 세트로 저장…", null, (_, _) => SaveAsNewPreset());
         _menu.Items.Add(new ToolStripSeparator());
@@ -614,6 +785,25 @@ public sealed class MainForm : Form
         _menu.Items.Add("전체 화면 (F11)", null, (_, _) => SetFullScreen(!_fullScreen));
         _menu.Items.Add(new ToolStripSeparator());
         _menu.Items.Add("종료", null, (_, _) => Close());
+    }
+
+    /// <summary>
+    /// Common shapes, so reshaping the wall does not require the toolbar or the set dialog.
+    /// Arbitrary sizes up to 12×12 stay available through the toolbar spinners.
+    /// </summary>
+    private ToolStripMenuItem BuildGridSizeMenu()
+    {
+        var item = new ToolStripMenuItem("격자 크기");
+        foreach (var (cols, rows) in new[] { (1, 1), (2, 1), (2, 2), (3, 2), (3, 3), (4, 2), (4, 3), (4, 4) })
+            item.DropDownItems.Add($"{cols} × {rows}", null, (_, _) => SetGridSize(cols, rows));
+
+        // Ticks are refreshed on open — the open set changes underneath this menu.
+        item.DropDownOpening += (_, _) =>
+        {
+            foreach (ToolStripMenuItem entry in item.DropDownItems)
+                entry.Checked = entry.Text == $"{_preset?.Columns} × {_preset?.Rows}";
+        };
+        return item;
     }
 
     private void ShowCellMenu(int index, Point screen)
@@ -666,6 +856,63 @@ public sealed class MainForm : Form
         Invalidate();
     }
 
+    private void QueueGridResize()
+    {
+        if (_suppressGridSpin) return;
+        _gridResizeDebounce.Stop();
+        _gridResizeDebounce.Start();
+    }
+
+    /// <summary>
+    /// Reshape the open set's grid. Cells keep their (row, column), so growing preserves
+    /// everything and shrinking discards only what falls outside the new bounds.
+    /// </summary>
+    private void SetGridSize(int cols, int rows)
+    {
+        if (_preset is null) return;
+        _gridResizeDebounce.Stop();
+
+        cols = Math.Clamp(cols, 1, 12);
+        rows = Math.Clamp(rows, 1, 12);
+        if (cols == _preset.Columns && rows == _preset.Rows)
+        {
+            UpdateGridSpin();
+            return;
+        }
+
+        int dropped = ConfiguredCellsOutside(cols, rows);
+        if (dropped > 0 && MessageBox.Show(
+                this,
+                $"격자를 {cols}×{rows}로 줄이면 설정된 셀 {dropped}개가 삭제됩니다.\n계속할까요?",
+                "격자 크기", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
+        {
+            UpdateGridSpin();
+            return;
+        }
+
+        _preset.Resize(cols, rows);
+        _store.SaveDeferred();
+        ShowBanner($"격자 {cols}×{rows}");
+        _ = LoadPresetAsync(_preset);
+    }
+
+    /// <summary>Configured cells that a shrink to <paramref name="cols"/>×<paramref name="rows"/> would throw away.</summary>
+    private int ConfiguredCellsOutside(int cols, int rows)
+    {
+        int oldCols = Math.Max(1, _preset.Columns), oldRows = Math.Max(1, _preset.Rows);
+        int count = 0;
+        for (int r = 0; r < oldRows; r++)
+        {
+            for (int c = 0; c < oldCols; c++)
+            {
+                if (r < rows && c < cols) continue;
+                int i = r * oldCols + c;
+                if (i < _preset.Cells.Count && _preset.Cells[i].IsConfigured) count++;
+            }
+        }
+        return count;
+    }
+
     private void ManagePresets()
     {
         // Remembered so an edit to the open set's dimensions is noticed even when the user
@@ -683,6 +930,7 @@ public sealed class MainForm : Form
 
         _store.SaveDeferred();
         UpdatePresetCombo();
+        UpdateGridSpin();
         UpdateTitle();
 
         if (result == DialogResult.OK && chosen is not null && chosen.Id != openId)
@@ -718,6 +966,15 @@ public sealed class MainForm : Form
         int index = S.Presets.FindIndex(p => p.Id == _preset?.Id);
         if (index >= 0) _presetCombo.SelectedIndex = index;
         _suppressCombo = false;
+    }
+
+    private void UpdateGridSpin()
+    {
+        if (_preset is null) return;
+        _suppressGridSpin = true;
+        _colsSpin.Value = Math.Clamp(_preset.Columns, 1, 12);
+        _rowsSpin.Value = Math.Clamp(_preset.Rows, 1, 12);
+        _suppressGridSpin = false;
     }
 
     private void UpdateTitle()
@@ -775,6 +1032,7 @@ public sealed class MainForm : Form
         {
             _hook.Dispose();
             _bannerTimer.Dispose();
+            _gridResizeDebounce.Dispose();
             _menu.Dispose();
             _store.Dispose();
             _applyCts?.Dispose();

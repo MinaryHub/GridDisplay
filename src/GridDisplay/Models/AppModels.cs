@@ -20,7 +20,22 @@ public sealed class CellConfig
     public string Url { get; set; } = string.Empty;
     /// <summary>WebView2 profile. Distinct names give cells independent cookies/logins.</summary>
     public string ProfileName { get; set; } = string.Empty;
+    /// <summary>
+    /// Scale the page down so the cell shows the same layout a fullscreen cell would. On by
+    /// default: a cell holds a fraction of the monitor, so at 100% only the page's top-left
+    /// corner is visible. <see cref="ZoomFactor"/> takes over when this is off.
+    /// </summary>
+    public bool FitToCell { get; set; } = true;
+    /// <summary>Fixed zoom, used only when <see cref="FitToCell"/> is off.</summary>
     public double ZoomFactor { get; set; } = 1.0;
+
+    /// <summary>
+    /// Keep this cell's session alive while the wall sits idle. Off by default — it pokes the
+    /// hosted page on a timer, which is only ever wanted where a site logs the user out.
+    /// </summary>
+    public bool PreventLogout { get; set; }
+    /// <summary>Seconds between keep-alive pulses. Clamped to 10..3600 by <see cref="GridPreset.Normalize"/>.</summary>
+    public int KeepAliveSeconds { get; set; } = 60;
 
     // --- Program ---
     public string ExecutablePath { get; set; } = string.Empty;
@@ -94,6 +109,8 @@ public sealed class GridPreset
         Cells ??= new List<CellConfig>();
         while (Cells.Count < CellCount) Cells.Add(new CellConfig());
         if (Cells.Count > CellCount) Cells.RemoveRange(CellCount, Cells.Count - CellCount);
+        foreach (var c in Cells)
+            c.KeepAliveSeconds = c.KeepAliveSeconds <= 0 ? 60 : Math.Clamp(c.KeepAliveSeconds, 10, 3600);
     }
 
     public GridPreset Duplicate(string name)
