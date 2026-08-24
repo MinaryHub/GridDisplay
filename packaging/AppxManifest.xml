@@ -2,10 +2,22 @@
 <!--
   Package manifest for the MSIX build.
 
-  build-msix.ps1 copies this file next to the published binaries and stamps three values into that
-  copy before packing: Identity/@Version (from <Version> in GridDisplay.csproj), Identity/@Publisher
-  and Identity/@Name (from its own parameters). Identity/@Publisher must match the signing
-  certificate's subject character for character, which is why it is a parameter and not a constant.
+  build-msix.ps1 copies this file next to the published binaries and stamps the identity values into
+  that copy before packing: Identity/@Version (from <Version> in GridDisplay.csproj),
+  Identity/@Name, Identity/@Publisher, Properties/PublisherDisplayName and Properties/DisplayName
+  (from its own parameters).
+
+  Those five are parameters and not constants because Microsoft Store dictates all of them. Reserve
+  the app name in Partner Center, then read Product identity off that page and pass it in:
+
+      -IdentityName          Package/Identity/Name        e.g. 12345SMIC.GridDisplay
+      -Publisher             Package/Identity/Publisher   e.g. CN=A1B2C3D4-....
+      -PublisherDisplayName  publisher display name       e.g. SMIC
+      -DisplayName           the reserved app name        e.g. Grid Display
+
+  A package whose identity does not match the reservation character for character is rejected at
+  upload, and Identity/@Publisher additionally has to match the signing certificate's subject when
+  the package is sideloaded rather than uploaded.
 
   EntryPoint="Windows.FullTrustApplication" is what makes this a packaged desktop app rather than a
   UWP one: the low-level input hooks and the SetParent reparenting the wall is built on need full
@@ -31,12 +43,19 @@
   </Properties>
 
   <Dependencies>
-    <!-- 17763 (1809) is the floor for AddPackageByAppInstallerFileAsync, which is how the app
-         installs its own updates. It is also SupportedOSPlatformVersion in the csproj. -->
-    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
+    <!--
+      17763 (1809) is the floor for AddPackageByAppInstallerFileAsync, which is how a sideloaded
+      package installs its own updates. It is also SupportedOSPlatformVersion in the csproj.
+      MaxVersionTested has to name a Windows the app was actually tried on; the Store shows it as
+      the supported range, and leaving it at an old build makes new Windows installs look unsupported.
+    -->
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.26100.0" />
   </Dependencies>
 
   <Resources>
+    <!-- First entry is the default language. Both are listed because the UI is Korean and the
+         Store listing is offered in English too; Partner Center matches listing languages
+         against this list. -->
     <Resource Language="ko-KR" />
     <Resource Language="en-US" />
   </Resources>
@@ -51,12 +70,24 @@
         BackgroundColor="#0E0E10"
         Square150x150Logo="Assets\Square150x150Logo.png"
         Square44x44Logo="Assets\Square44x44Logo.png">
-        <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" ShortName="Grid Display" />
+        <!-- Every tile size the shell can ask for, so none of them is an upscaled 150x150. -->
+        <uap:DefaultTile
+          Wide310x150Logo="Assets\Wide310x150Logo.png"
+          Square71x71Logo="Assets\Square71x71Logo.png"
+          Square310x310Logo="Assets\Square310x310Logo.png"
+          ShortName="Grid Display" />
       </uap:VisualElements>
     </Application>
   </Applications>
 
   <Capabilities>
+    <!--
+      Restricted, and the only capability this app declares. Store submission asks for a
+      justification for it: the wall reparents other applications' windows with SetParent and
+      intercepts input with low-level hooks, neither of which a UWP-sandboxed process can do.
+      Packaged desktop apps are the intended users of runFullTrust, so it is granted routinely -
+      but the justification field is not optional. See packaging\README.md.
+    -->
     <rescap:Capability Name="runFullTrust" />
   </Capabilities>
 </Package>

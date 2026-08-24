@@ -7,11 +7,16 @@ namespace GridDisplay.Forms;
 /// Version info and the manual update path: which build is running, where updates come from, and
 /// the two ways to take one. Edits are written straight into the shared <see cref="AppState"/> —
 /// the caller owns saving, the same aliasing the rest of the app relies on.
+///
+/// A Store install gets a different dialog: no feed address, no install buttons, one button that
+/// opens the Store. Not cosmetic — <see cref="AppVersion.IsStoreInstall"/> also disarms
+/// <see cref="UpdateService"/>, and the dialog has to stop offering what the service refuses.
 /// </summary>
 public sealed class UpdateForm : Form
 {
     private readonly AppState _state;
     private readonly UpdateService _updates;
+    private readonly bool _storeManaged = AppVersion.IsStoreInstall;
 
     private readonly TextBox _feedUrl = new();
     private readonly CheckBox _autoCheck = new() { Text = "자동으로 확인", AutoSize = true };
@@ -59,6 +64,66 @@ public sealed class UpdateForm : Form
 
         // --- where updates come from ---
         var feedBox = new GroupBox { Text = "업데이트 원본", Bounds = new Rectangle(S(12), y, S(516), S(126)) };
+        if (_storeManaged) FillStoreFeedBox(feedBox); else FillSelfManagedFeedBox(feedBox);
+        Controls.Add(feedBox);
+        y += S(138);
+
+        // --- check + result ---
+        // No "check now" on a Store build: the Store already checked, and a button whose only
+        // possible answer is "the Store handles it" is worse than no button.
+        _check.Bounds = new Rectangle(S(12), y, S(110), S(28));
+        _check.Click += async (_, _) => await RunCheckAsync().ConfigureAwait(true);
+        _check.Visible = !_storeManaged;
+        Controls.Add(_check);
+
+        _status.Bounds = _storeManaged
+            ? new Rectangle(S(12), y, S(516), S(46))
+            : new Rectangle(S(132), y, S(396), S(46));
+        Controls.Add(_status);
+        y += S(54);
+
+        _progress.Bounds = new Rectangle(S(12), y, S(516), S(12));
+        Controls.Add(_progress);
+        y += S(24);
+
+        // The one action a Store build offers reuses this button: same slot, different job.
+        _installLater.Bounds = new Rectangle(S(12), y, S(180), S(30));
+        if (_storeManaged)
+        {
+            _installLater.Text = "Microsoft Store 열기";
+            _installLater.Enabled = true;
+            _installLater.Click += (_, _) => ShowApplyResult(UpdateService.OpenStoreUpdates());
+        }
+        else
+        {
+            _installLater.Click += async (_, _) => await ApplyAsync(restartNow: false).ConfigureAwait(true);
+        }
+        Controls.Add(_installLater);
+
+        _installNow.Bounds = new Rectangle(S(200), y, S(150), S(30));
+        _installNow.Click += async (_, _) => await ApplyAsync(restartNow: true).ConfigureAwait(true);
+        _installNow.Visible = !_storeManaged;
+        Controls.Add(_installNow);
+
+        _close.Bounds = new Rectangle(S(428), y, S(100), S(30));
+        _close.Click += (_, _) => Close();
+        Controls.Add(_close);
+        CancelButton = _close;
+
+        LoadState();
+        ShowResult(_storeManaged ? null : _updates.Last);
+    }
+
+    private void FillStoreFeedBox(GroupBox box) => box.Controls.Add(new Label
+    {
+        Text = "Microsoft Store가 이 앱의 업데이트를 관리합니다.\n\n" +
+               "새 버전은 Store가 백그라운드에서 내려받아 설치하므로 주소를 지정하거나\n" +
+               "직접 설치할 필요가 없습니다. 지금 바로 확인하려면 아래에서 Store를 여세요.",
+        Bounds = new Rectangle(S(16), S(28), S(484), S(80)),
+    });
+
+    private void FillSelfManagedFeedBox(GroupBox feedBox)
+    {
         feedBox.Controls.Add(Caption("주소", S(16), S(27)));
         _feedUrl.Bounds = new Rectangle(S(110), S(24), S(390), S(23));
         _feedUrl.PlaceholderText = "https://example/griddisplay/GridDisplay.appinstaller";
@@ -83,37 +148,6 @@ public sealed class UpdateForm : Form
         feedBox.Controls.Add(hoursSuffix);
         _lastChecked.Location = new Point(hoursSuffix.Right + S(16), S(79));
         feedBox.Controls.Add(_lastChecked);
-        Controls.Add(feedBox);
-        y += S(138);
-
-        // --- check + result ---
-        _check.Bounds = new Rectangle(S(12), y, S(110), S(28));
-        _check.Click += async (_, _) => await RunCheckAsync().ConfigureAwait(true);
-        Controls.Add(_check);
-
-        _status.Bounds = new Rectangle(S(132), y, S(396), S(46));
-        Controls.Add(_status);
-        y += S(54);
-
-        _progress.Bounds = new Rectangle(S(12), y, S(516), S(12));
-        Controls.Add(_progress);
-        y += S(24);
-
-        _installLater.Bounds = new Rectangle(S(12), y, S(180), S(30));
-        _installLater.Click += async (_, _) => await ApplyAsync(restartNow: false).ConfigureAwait(true);
-        Controls.Add(_installLater);
-
-        _installNow.Bounds = new Rectangle(S(200), y, S(150), S(30));
-        _installNow.Click += async (_, _) => await ApplyAsync(restartNow: true).ConfigureAwait(true);
-        Controls.Add(_installNow);
-
-        _close.Bounds = new Rectangle(S(428), y, S(100), S(30));
-        _close.Click += (_, _) => Close();
-        Controls.Add(_close);
-        CancelButton = _close;
-
-        LoadState();
-        ShowResult(_updates.Last);
     }
 
     private void LoadState()
@@ -129,6 +163,9 @@ public sealed class UpdateForm : Form
     /// <summary>Push the edits back before every action, so a check uses the address just typed.</summary>
     private void CommitState()
     {
+        // Nothing to commit on a Store build — those controls were never shown, so writing them
+        // back would only mark the state dirty and provoke a pointless save.
+        if (_storeManaged) return;
         _state.UpdateFeedUrl = _feedUrl.Text.Trim();
         _state.AutoCheckUpdates = _autoCheck.Checked;
         _state.UpdateCheckHours = (int)_hours.Value;
@@ -165,15 +202,7 @@ public sealed class UpdateForm : Form
         var progress = new Progress<int>(p => _progress.Value = Math.Clamp(p, 0, 100));
         try
         {
-            var result = await _updates.ApplyAsync(_found, restartNow, progress).ConfigureAwait(true);
-            _status.ForeColor = result.Outcome == UpdateApplyOutcome.Failed ? Color.FromArgb(180, 40, 40) : ForeColor;
-            _status.Text = result.Message;
-            if (result.Outcome != UpdateApplyOutcome.Failed)
-            {
-                _installLater.Enabled = false;
-                _installNow.Enabled = false;
-                _found = null;
-            }
+            ShowApplyResult(await _updates.ApplyAsync(_found, restartNow, progress).ConfigureAwait(true));
         }
         finally
         {
@@ -182,8 +211,32 @@ public sealed class UpdateForm : Form
         }
     }
 
+    /// <summary>
+    /// Report an apply attempt. Anything but a failure retires the buttons: the work is either done
+    /// or now somebody else's (the shell's, or the Store's), and pressing again would repeat it.
+    /// </summary>
+    private void ShowApplyResult(UpdateApplyResult result)
+    {
+        _status.ForeColor = result.Outcome == UpdateApplyOutcome.Failed ? Color.FromArgb(180, 40, 40) : ForeColor;
+        _status.Text = result.Message;
+        if (result.Outcome == UpdateApplyOutcome.Failed) return;
+        // Opening the Store is repeatable and costs nothing, so that one button stays live.
+        if (_storeManaged) return;
+        _installLater.Enabled = false;
+        _installNow.Enabled = false;
+        _found = null;
+    }
+
     private void ShowResult(UpdateCheckResult? result)
     {
+        if (_storeManaged)
+        {
+            // The button is already labelled and enabled for the Store; only the caption is left.
+            _status.ForeColor = ForeColor;
+            _status.Text = $"Microsoft Store가 자동으로 업데이트합니다 (현재 {AppVersion.Display}).";
+            return;
+        }
+
         _found = result is { Status: UpdateStatus.Available } ? result : null;
         // An unpackaged build can still find and download an update, it just cannot install it
         // itself — so the buttons stay live and say what they will do in the result message.

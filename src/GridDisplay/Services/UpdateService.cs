@@ -12,6 +12,8 @@ public enum UpdateStatus
 {
     /// <summary>Nothing to ask: the build has no package identity, so it cannot replace itself.</summary>
     NotSupported,
+    /// <summary>Installed from Microsoft Store, which owns updating it. Nothing for the app to do.</summary>
+    ManagedByStore,
     /// <summary>No feed URL, and the install source did not carry one either.</summary>
     NotConfigured,
     UpToDate,
@@ -33,6 +35,8 @@ public enum UpdateApplyOutcome
     Restarting,
     /// <summary>Unpackaged build: the installer was handed to the shell for the user to run.</summary>
     HandedToUser,
+    /// <summary>Store install: the Store app was opened on its updates page.</summary>
+    OpenedStore,
     Failed,
 }
 
@@ -41,7 +45,11 @@ public sealed record UpdateApplyResult(UpdateApplyOutcome Outcome, string Messag
 /// <summary>
 /// Version checking and self-update over MSIX.
 ///
-/// Three sources of truth, tried in that order, because a wall can be deployed three ways:
+/// Four sources of truth, tried in that order, because a wall can be deployed four ways:
+///   0. installed from Microsoft Store — the Store updates it, and Store Policy 10.2 reserves that
+///      job for the Store, so this class checks nothing and installs nothing. Leaving the
+///      self-update path reachable in a Store build is a certification failure, not merely
+///      redundant work;
 ///   1. an explicit feed URL in <see cref="AppState.UpdateFeedUrl"/> — an .appinstaller file or a
 ///      small update.json. Parsing the feed ourselves is what makes the version *number* known,
 ///      which the OS check below never reveals;
@@ -70,6 +78,9 @@ public sealed class UpdateService
     /// <summary>True when enough time has passed for the periodic check to be worth running.</summary>
     public bool IsCheckDue()
     {
+        // A Store install is updated by the Store, in the background, whether the app is running or
+        // not. Polling would only raise a banner about something the user cannot act on here.
+        if (AppVersion.IsStoreInstall) return false;
         if (!_state.AutoCheckUpdates) return false;
         var last = _state.LastUpdateCheckUtc;
         if (last is null) return true;
@@ -90,11 +101,41 @@ public sealed class UpdateService
 
     private async Task<UpdateCheckResult> RunCheckAsync(CancellationToken ct)
     {
+        if (AppVersion.IsStoreInstall) return ManagedByStore();
+
         var feed = (_state.UpdateFeedUrl ?? string.Empty).Trim();
         if (feed.Length > 0) return await CheckFeedAsync(feed, ct).ConfigureAwait(true);
         if (AppVersion.IsPackaged) return await CheckWithWindowsAsync().ConfigureAwait(true);
         return new UpdateCheckResult(UpdateStatus.NotConfigured, null, null,
             "업데이트 주소가 설정되지 않았습니다. .appinstaller 또는 update.json 주소를 입력하세요.");
+    }
+
+    // ------------------------------------------------------------------ Store
+
+    /// <summary>
+    /// Deep link to the Store's own "downloads and updates" page. Deliberately not a product page:
+    /// that needs the Store ID, which only exists once the app has been published, whereas this URI
+    /// is correct from the first submission onwards and lands the user exactly where the update is.
+    /// </summary>
+    private const string StoreUpdatesUri = "ms-windows-store://downloadsandupdates";
+
+    private static UpdateCheckResult ManagedByStore() =>
+        new(UpdateStatus.ManagedByStore, null, null,
+            $"Microsoft Store가 자동으로 업데이트합니다 (현재 {AppVersion.Display}).");
+
+    /// <summary>Open the Store on its updates page. The only update action a Store build offers.</summary>
+    public static UpdateApplyResult OpenStoreUpdates()
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(StoreUpdatesUri) { UseShellExecute = true });
+            return new UpdateApplyResult(UpdateApplyOutcome.OpenedStore,
+                "Microsoft Store를 열었습니다. '업데이트 가져오기'를 누르면 새 버전이 설치됩니다.");
+        }
+        catch (Exception ex)
+        {
+            return new UpdateApplyResult(UpdateApplyOutcome.Failed, $"Microsoft Store를 열 수 없습니다: {ex.Message}");
+        }
     }
 
     // ------------------------------------------------------------------ feed
@@ -212,6 +253,10 @@ public sealed class UpdateService
     /// </summary>
     public async Task<UpdateApplyResult> ApplyAsync(UpdateCheckResult check, bool restartNow, IProgress<int>? progress = null)
     {
+        // Store build: hand the job to the Store instead of staging a package ourselves. This is
+        // the guard that keeps PackageManager out of a Store submission's reachable code paths.
+        if (AppVersion.IsStoreInstall) return OpenStoreUpdates();
+
         var source = (check.Source ?? _state.UpdateFeedUrl ?? string.Empty).Trim();
 
         if (!AppVersion.IsPackaged)

@@ -13,8 +13,15 @@
 ## 요구 사항
 
 - Windows 10 1809 이상 (x64)
-- [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0)
+- [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0) — Microsoft Store 버전은 런타임을 포함하므로 따로 설치할 필요가 없습니다.
 - [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) — 브라우저 칸에 필요합니다. Windows 11에는 기본 포함되어 있습니다.
+
+## 설치
+
+- **Microsoft Store** — 설치와 업데이트를 Store가 관리합니다. 런타임이 패키지에 들어 있어 사전 준비가 없습니다.
+- **MSIX 사이드로딩** — 사내 서버나 공유 폴더에서 배포하는 방식입니다. `.appinstaller`를 실행하면 이후 새 버전을 앱이 스스로 가져옵니다.
+
+두 배포물을 만드는 방법과 Store 등록 절차는 [`packaging/README.md`](packaging/README.md)에 있습니다.
 
 ## 빌드 및 실행
 

@@ -136,8 +136,14 @@ if (-not (Test-Path $OutputDirectory)) { New-Item -ItemType Directory -Path $Out
 
 Write-Host "Writing assets to $OutputDirectory"
 Save-Png -Width 44  -Height 44  -Path (Join-Path $OutputDirectory 'Square44x44Logo.png')
+# 71x71 and 310x310 are the small and large Start tiles. Optional in the manifest — Windows would
+# scale the 150x150 instead — but the Store shows tiles at every size, and a scaled-up 150 is
+# visibly soft next to a native one.
+Save-Png -Width 71  -Height 71  -Path (Join-Path $OutputDirectory 'Square71x71Logo.png')
 Save-Png -Width 150 -Height 150 -Path (Join-Path $OutputDirectory 'Square150x150Logo.png')
+Save-Png -Width 310 -Height 310 -Path (Join-Path $OutputDirectory 'Square310x310Logo.png')
 Save-Png -Width 310 -Height 150 -Path (Join-Path $OutputDirectory 'Wide310x150Logo.png')
+# 50x50 is the size Partner Center and the Store listing read this one at.
 Save-Png -Width 50  -Height 50  -Path (Join-Path $OutputDirectory 'StoreLogo.png')
 # Unplated: what the task bar and Start's icon-only surfaces show, so it has no square behind it.
 Save-Png -Width 44  -Height 44  -Path (Join-Path $OutputDirectory 'Square44x44Logo.targetsize-44_altform-unplated.png') -Transparent

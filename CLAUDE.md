@@ -128,6 +128,26 @@ because the gap between cells is the only surface the form can paint on.
 - `AppState.SuspendHiddenCells` (off by default) trades switch latency for memory.
 - `NativeAppHost` re-asserts geometry from a 1s watchdog rather than a tight timer or a hook.
 
+**Packaging has two targets and they are not interchangeable.** `packaging/build-msix.ps1` builds
+either a signed `.msix` plus an `.appinstaller` feed for sideloading, or — with `-Store` — a
+`.msixupload` for Microsoft Store. The Store variant is *self-contained*, because the Store cannot
+install the .NET Desktop Runtime on a customer's machine, and it is *unsigned*, because Partner
+Center strips any signature and re-signs. Identity (`Name`, `Publisher`, `PublisherDisplayName`,
+`DisplayName`) is stamped from parameters rather than checked in: the Store dictates all four and
+rejects a package that differs by a character. See `packaging/README.md`.
+
+The corresponding code decision is that **a Store install disables the app's own updater rather
+than hiding it**. `AppVersion.IsStoreInstall` reads `Package.Current.SignatureKind`; when it is
+true `UpdateService` neither checks nor installs, and `UpdateForm` collapses to one button that
+opens the Store. Store policy reserves updating a Store app for the Store, so a submission with a
+reachable `PackageManager` path is a certification failure, not merely redundant work.
+
+Two traps in the packaging script, both already handled: XML is read with `XmlDocument.Load`, never
+`[xml](Get-Content -Raw)`, because Windows PowerShell decodes a BOM-less file with the system ANSI
+codepage and turns the manifest's Korean description into mojibake that no longer parses; and the
+SDK tools come from the `Microsoft.Windows.SDK.BuildTools` NuGet package (`packaging/SdkTools.proj`)
+when no Windows SDK is installed, which is the normal case on a machine that only has the .NET SDK.
+
 ## Layout of the source
 
 `Models/` plain persisted state · `Services/` state store + input hooks · `Interop/` P/Invoke and

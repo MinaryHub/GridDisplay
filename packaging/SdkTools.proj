@@ -1,0 +1,21 @@
+<!--
+  Not part of the application. This project exists so that restoring it drops makeappx.exe,
+  signtool.exe and makepri.exe into the NuGet cache, which is where build-msix.ps1 looks when the
+  machine has no Windows SDK installed. Pinning the version here keeps every build machine on the
+  same packaging tools, whatever SDKs happen to be lying around on it.
+
+  It is deliberately outside GridDisplay.sln: nothing should ever compile it.
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <EnableDefaultItems>false</EnableDefaultItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.1742" />
+  </ItemGroup>
+
+</Project>
