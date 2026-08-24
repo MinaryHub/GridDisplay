@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Template for the update feed. build-msix.ps1 substitutes the {{...}} placeholders and writes the
+  real .appinstaller next to the .msix; publish both to the same folder on the web server or share.
+
+  This one file does two jobs. Windows reads UpdateSettings and updates the package on its own,
+  and the app's own update dialog reads MainPackage/@Version out of it to say which version is
+  waiting — which the OS check alone never reveals. Keep them pointing at the same URI so the
+  in-app "install" and the OS agree on what they are installing.
+-->
+<AppInstaller
+  xmlns="http://schemas.microsoft.com/appx/appinstaller/2018"
+  Uri="{{BASEURI}}/GridDisplay.appinstaller"
+  Version="{{VERSION}}">
+
+  <MainPackage
+    Name="{{IDENTITYNAME}}"
+    Publisher="{{PUBLISHER}}"
+    Version="{{VERSION}}"
+    ProcessorArchitecture="x64"
+    Uri="{{BASEURI}}/{{MSIXNAME}}" />
+
+  <UpdateSettings>
+    <!--
+      ShowPrompt=false / UpdateBlocksActivation=false: a wall must come up when the screen is
+      switched on, never sit behind a modal update dialog nobody is standing next to. The update is
+      downloaded in the background and applied the next time the app is launched.
+    -->
+    <OnLaunch HoursBetweenUpdateChecks="8" ShowPrompt="false" UpdateBlocksActivation="false" />
+    <!-- false: only move forward. Set it to true for the one release where a rollback is intended. -->
+    <ForceUpdateFromAnyVersion>false</ForceUpdateFromAnyVersion>
+    <!-- Checks roughly every 8 hours even if the app is never relaunched — the normal state of a
+         wall that stays open for weeks. -->
+    <AutomaticBackgroundTask />
+  </UpdateSettings>
+</AppInstaller>

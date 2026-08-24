@@ -25,6 +25,7 @@ public sealed class MainForm : Form
     private readonly StateStore _store = new();
     private readonly InputHook _hook = new();
     private readonly List<CellHost> _cells = new();
+    private readonly UpdateService _updates;
 
     private readonly Panel _bar = new();
     private readonly ComboBox _presetCombo = new();
@@ -33,6 +34,7 @@ public sealed class MainForm : Form
     private readonly System.Windows.Forms.Timer _gridResizeDebounce = new();
     private readonly Label _banner = new();
     private readonly System.Windows.Forms.Timer _bannerTimer = new();
+    private readonly System.Windows.Forms.Timer _updateTimer = new();
     private readonly ContextMenuStrip _menu = new();
 
     private GridPreset _preset = null!;
@@ -64,7 +66,11 @@ public sealed class MainForm : Form
     {
         _store.Load();
 
-        Text = "Grid Display";
+        _updates = new UpdateService(S);
+
+        // The running version belongs in the title bar: a wall is usually read over
+        // somebody's shoulder, and this is the one place it shows without opening a dialog.
+        Text = $"Grid Display {AppVersion.Display}";
         BackColor = BackgroundColor;
         MinimumSize = new Size(640, 400);
         StartPosition = FormStartPosition.Manual;
@@ -97,6 +103,7 @@ public sealed class MainForm : Form
         _hook.Install();
         if (S.StartFullScreen) SetFullScreen(true);
         await LoadPresetAsync(S.ActivePreset()).ConfigureAwait(true);
+        StartUpdateWatch();
     }
 
     /// <summary>Swap the whole grid to <paramref name="preset"/> and bring its cells up.</summary>
@@ -655,12 +662,14 @@ public sealed class MainForm : Form
             BarButton("세트 관리…", (_, _) => ManagePresets()),
             BarButton("셀 설정…", (_, _) => EditCell(_selected)),
             BarButton("전체 화면", (_, _) => SetFullScreen(!_fullScreen)),
+            BarButton("업데이트…", (_, _) => ShowUpdateDialog()),
             BarLabel("격자", Color.FromArgb(200, 200, 210)),
             _colsSpin,
             BarLabel("×", Color.FromArgb(200, 200, 210)),
             _rowsSpin,
             BarLabel("F1 도구모음 · F2 입력 모드 · F11 전체 화면 · Ctrl+1~9 세트 · 우클릭 메뉴",
                 Color.FromArgb(150, 150, 160)),
+            BarLabel($"v{AppVersion.Display}", Color.FromArgb(120, 120, 130)),
         };
         _bar.Controls.AddRange(_barItems);
 
@@ -784,6 +793,7 @@ public sealed class MainForm : Form
         _menu.Items.Add("도구 모음 표시/숨김 (F1)", null, (_, _) => ToggleBar());
         _menu.Items.Add("전체 화면 (F11)", null, (_, _) => SetFullScreen(!_fullScreen));
         _menu.Items.Add(new ToolStripSeparator());
+        _menu.Items.Add("버전 및 업데이트…", null, (_, _) => ShowUpdateDialog());
         _menu.Items.Add("종료", null, (_, _) => Close());
     }
 
@@ -1026,12 +1036,54 @@ public sealed class MainForm : Form
         base.OnFormClosing(e);
     }
 
+    // ------------------------------------------------------------------ updates
+
+    /// <summary>
+    /// Watch for a new version in the background. Deliberately quiet: the first look waits a
+    /// minute so it never competes with cells coming up, a found update only raises the banner,
+    /// and nothing installs until the user presses a button in the dialog — the wall can be
+    /// mid-presentation at any moment.
+    /// </summary>
+    private void StartUpdateWatch()
+    {
+        _updateTimer.Interval = 60_000;
+        _updateTimer.Tick += async (_, _) => await PollForUpdateAsync().ConfigureAwait(true);
+        _updateTimer.Start();
+    }
+
+    private async Task PollForUpdateAsync()
+    {
+        // Re-arm long after the first shot. Whether a check is due is UpdateService's decision;
+        // this timer only wakes it often enough to notice the interval passing.
+        _updateTimer.Interval = 30 * 60_000;
+        if (_closing || !_updates.IsCheckDue()) return;
+        try
+        {
+            var result = await _updates.CheckAsync().ConfigureAwait(true);
+            if (_closing) return;
+            if (result.Status is UpdateStatus.UpToDate or UpdateStatus.Available) _store.SaveDeferred();
+            if (result.HasUpdate) ShowBanner($"{result.Message} 우클릭 메뉴 › 버전 및 업데이트");
+        }
+        catch
+        {
+            // Same rule as a failing cell: an update check never takes the wall down with it.
+        }
+    }
+
+    private void ShowUpdateDialog()
+    {
+        using var dialog = new UpdateForm(S, _updates);
+        dialog.ShowDialog(this);
+        if (dialog.SettingsChanged) _store.SaveDeferred();
+    }
+
     protected override void Dispose(bool disposing)
     {
         if (disposing)
         {
             _hook.Dispose();
             _bannerTimer.Dispose();
+            _updateTimer.Dispose();
             _gridResizeDebounce.Dispose();
             _menu.Dispose();
             _store.Dispose();

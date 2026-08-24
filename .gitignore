@@ -4,3 +4,5 @@ obj/
 *.user
 *.suo
 publish/
+packaging/*.pfx
+packaging/*.cer

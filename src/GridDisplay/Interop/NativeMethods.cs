@@ -210,6 +210,24 @@ internal static class NativeMethods
         return sb.ToString();
     }
 
+    // --- Package identity (MSIX) ---
+    /// <summary>Returned by <see cref="GetCurrentPackageFullName"/> when the process runs outside a package.</summary>
+    internal const int APPMODEL_ERROR_NO_PACKAGE = 15700;
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    internal static extern int GetCurrentPackageFullName(ref int packageFullNameLength, StringBuilder? packageFullName);
+
+    /// <summary>
+    /// True when this process was launched from an MSIX package. Asked through the Win32 entry
+    /// point rather than by catching the exception WinRT's <c>Package.Current</c> throws to say
+    /// "unpackaged" — that would be a first-chance exception on every unpackaged startup.
+    /// </summary>
+    internal static bool HasPackageIdentity()
+    {
+        int length = 0;
+        return GetCurrentPackageFullName(ref length, null) != APPMODEL_ERROR_NO_PACKAGE;
+    }
+
     /// <summary>
     /// Move focus to a window owned by another process. Windows refuses cross-thread focus
     /// changes unless the input queues are attached first.

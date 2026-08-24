@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Package manifest for the MSIX build.
+
+  build-msix.ps1 copies this file next to the published binaries and stamps three values into that
+  copy before packing: Identity/@Version (from <Version> in GridDisplay.csproj), Identity/@Publisher
+  and Identity/@Name (from its own parameters). Identity/@Publisher must match the signing
+  certificate's subject character for character, which is why it is a parameter and not a constant.
+
+  EntryPoint="Windows.FullTrustApplication" is what makes this a packaged desktop app rather than a
+  UWP one: the low-level input hooks and the SetParent reparenting the wall is built on need full
+  trust, and runFullTrust below is the capability that grants it.
+-->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap rescap">
+
+  <Identity
+    Name="SMIC.GridDisplay"
+    Publisher="CN=SMIC"
+    Version="1.0.0.0"
+    ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>Grid Display</DisplayName>
+    <PublisherDisplayName>SMIC</PublisherDisplayName>
+    <Description>브라우저와 프로그램을 격자로 배치하는 디스플레이 월</Description>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <!-- 17763 (1809) is the floor for AddPackageByAppInstallerFileAsync, which is how the app
+         installs its own updates. It is also SupportedOSPlatformVersion in the csproj. -->
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="ko-KR" />
+    <Resource Language="en-US" />
+  </Resources>
+
+  <Applications>
+    <!-- Id is the AUMID's application part. UpdateService.AppId repeats it to relaunch the wall
+         after an update that forced a shutdown; the two must stay in sync. -->
+    <Application Id="GridDisplay" Executable="GridDisplay.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="Grid Display"
+        Description="브라우저와 프로그램을 격자로 배치하는 디스플레이 월"
+        BackgroundColor="#0E0E10"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" ShortName="Grid Display" />
+      </uap:VisualElements>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>

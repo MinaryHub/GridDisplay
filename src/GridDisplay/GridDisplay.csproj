@@ -2,7 +2,13 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <!--
+      windows10.0.19041.0 (not plain net8.0-windows) so the app can call the WinRT packaging APIs
+      it needs to update itself: Windows.ApplicationModel.Package and
+      Windows.Management.Deployment.PackageManager. Nothing else in the app depends on it.
+    -->
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
     <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -13,11 +19,27 @@
     <SelfContained>false</SelfContained>
     <AssemblyName>GridDisplay</AssemblyName>
     <RootNamespace>GridDisplay</RootNamespace>
+    <ApplicationIcon>..\..\packaging\Assets\GridDisplay.ico</ApplicationIcon>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <ApplicationVisualStyles>true</ApplicationVisualStyles>
     <ApplicationUseCompatibleTextRendering>false</ApplicationUseCompatibleTextRendering>
     <SatelliteResourceLanguages>en;ko</SatelliteResourceLanguages>
     <InvariantGlobalization>false</InvariantGlobalization>
+  </PropertyGroup>
+
+  <!--
+    Single source of truth for the version. packaging\build-msix.ps1 reads <Version> out of this
+    file and stamps it into AppxManifest.xml and the .appinstaller, so the package version and the
+    binary's version can never drift apart. Bump it here and nowhere else.
+    Keep it three-part: MSIX wants four parts and the packaging script appends the ".0".
+  -->
+  <PropertyGroup>
+    <Version>1.0.0</Version>
+    <AssemblyVersion>$(Version).0</AssemblyVersion>
+    <FileVersion>$(Version).0</FileVersion>
+    <Company>SMIC</Company>
+    <Product>Grid Display</Product>
+    <Description>Windows display-wall app that tiles browsers and native applications into a grid.</Description>
   </PropertyGroup>
 
   <ItemGroup>

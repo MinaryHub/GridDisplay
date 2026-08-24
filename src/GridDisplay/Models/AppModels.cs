@@ -151,6 +151,18 @@ public sealed class AppState
     /// <summary>Let hidden browser cells release memory. Costs a few hundred ms when the cell is shown again.</summary>
     public bool SuspendHiddenCells { get; set; }
 
+    /// <summary>
+    /// Where to look for a new version: an .appinstaller file or a small update.json. Empty means
+    /// "ask Windows", which is enough when the app itself was installed from an .appinstaller.
+    /// </summary>
+    public string UpdateFeedUrl { get; set; } = string.Empty;
+    /// <summary>Check once at startup and then every <see cref="UpdateCheckHours"/> hours.</summary>
+    public bool AutoCheckUpdates { get; set; } = true;
+    /// <summary>Hours between automatic checks. Clamped to 1..168 by <see cref="Normalize"/>.</summary>
+    public int UpdateCheckHours { get; set; } = 24;
+    /// <summary>Last successful check, so a restarted wall does not re-check straight away.</summary>
+    public DateTime? LastUpdateCheckUtc { get; set; }
+
     public GridPreset ActivePreset()
     {
         var found = Presets.FirstOrDefault(p => p.Id == ActivePresetId);
@@ -173,6 +185,7 @@ public sealed class AppState
         if (Presets.Count == 0) Presets.Add(GridPreset.CreateDefault());
         foreach (var p in Presets) p.Normalize();
         CellGap = Math.Clamp(CellGap, 0, 64);
+        UpdateCheckHours = Math.Clamp(UpdateCheckHours <= 0 ? 24 : UpdateCheckHours, 1, 24 * 7);
         if (InputModeKey == Keys.None) InputModeKey = Keys.F2;
     }
 }
