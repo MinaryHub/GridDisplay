@@ -51,7 +51,7 @@ Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
 ; The wizard and the Programs-and-Features entry both show the app's own icon.
-SetupIconFile={#SourcePath}\..\src\GridDisplay\app.ico
+SetupIconFile={#SourcePath}\..\packaging\Assets\GridDisplay.ico
 
 ; The wall may well be running when an update is installed by hand; let Restart Manager
 ; close it rather than failing on a locked GridDisplay.exe.

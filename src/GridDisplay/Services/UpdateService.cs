@@ -25,6 +25,13 @@ public enum UpdateStatus
 public sealed record UpdateCheckResult(UpdateStatus Status, Version? Latest, string? Source, string Message)
 {
     public bool HasUpdate => Status == UpdateStatus.Available;
+
+    /// <summary>
+    /// Hex SHA-256 of the package, when the feed carries one. Only the unpackaged path uses it:
+    /// MSIX verifies its own signature, but a zip replacing the install folder has nothing
+    /// checking it but us.
+    /// </summary>
+    public string? Sha256 { get; init; }
 }
 
 public enum UpdateApplyOutcome
@@ -161,14 +168,14 @@ public sealed class UpdateService
 
         try
         {
-            var (latest, source) = body.TrimStart().StartsWith('<')
+            var (latest, source, sha256) = body.TrimStart().StartsWith('<')
                 ? ParseAppInstaller(body, uri)
                 : ParseJsonFeed(body, uri);
 
             if (latest is null)
                 return new UpdateCheckResult(UpdateStatus.Failed, null, null, "업데이트 정보에서 버전을 찾을 수 없습니다.");
 
-            return Compare(latest, source);
+            return Compare(latest, source) with { Sha256 = sha256 };
         }
         catch (Exception ex)
         {
@@ -181,7 +188,7 @@ public sealed class UpdateService
     /// name, so a feed authored against any of the several AppInstaller XML namespaces still
     /// parses — that namespace changes with the Windows release the file was authored for.
     /// </summary>
-    private static (Version? Latest, string Source) ParseAppInstaller(string xml, Uri feedUri)
+    private static (Version? Latest, string Source, string? Sha256) ParseAppInstaller(string xml, Uri feedUri)
     {
         var root = XDocument.Parse(xml).Root ?? throw new InvalidDataException("빈 .appinstaller 파일입니다.");
 
@@ -192,16 +199,17 @@ public sealed class UpdateService
         // install from, and it stays right even when the file was fetched through a mirror.
         var declared = root.Attribute("Uri")?.Value;
         var source = string.IsNullOrWhiteSpace(declared) ? feedUri.ToString() : declared!;
-        return (version, source);
+        // An .appinstaller carries no hash: MSIX is signed, and Windows checks the signature.
+        return (version, source, null);
     }
 
-    private static (Version? Latest, string Source) ParseJsonFeed(string json, Uri feedUri)
+    private static (Version? Latest, string Source, string? Sha256) ParseJsonFeed(string json, Uri feedUri)
     {
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
         var version = ParseVersion(Text(root, "version") ?? Text(root, "latestVersion"));
         var source = Text(root, "appInstallerUrl") ?? Text(root, "url") ?? Text(root, "packageUrl") ?? feedUri.ToString();
-        return (version, source);
+        return (version, source, Text(root, "sha256"));
 
         static string? Text(JsonElement obj, string name) =>
             obj.ValueKind == JsonValueKind.Object && obj.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
@@ -261,11 +269,19 @@ public sealed class UpdateService
 
         if (!AppVersion.IsPackaged)
         {
-            // No package identity: the most this build can do is put the installer in front of the
-            // user. ms-appinstaller: is disabled by default on current Windows, so hand the plain
-            // URL to the shell and let the browser download it.
             if (source.Length == 0)
                 return new UpdateApplyResult(UpdateApplyOutcome.Failed, "설치 파일 주소를 알 수 없습니다.");
+
+            // A zip with a hash beside it is the Inno-installed shape, and that one this build can
+            // finish by itself: download, verify, and let UpdateInstaller swap the install folder.
+            // MSIX cannot be updated this way — its install folder is read-only — which is why the
+            // two paths part here rather than earlier.
+            if (source.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(check.Sha256))
+                return await ApplyUnpackagedZipAsync(source, check.Sha256!, progress).ConfigureAwait(true);
+
+            // Anything else — an .appinstaller or a bare .msix — needs Windows to install it.
+            // ms-appinstaller: is disabled by default on current Windows, so hand the plain URL to
+            // the shell and let the browser download it.
             try
             {
                 Process.Start(new ProcessStartInfo(source) { UseShellExecute = true });
@@ -348,6 +364,46 @@ public sealed class UpdateService
     }
 
     // ------------------------------------------------------------------ helpers
+
+    /// <summary>
+    /// Update a copy that was installed from the Inno Setup package: fetch the zip, check it
+    /// against the feed's hash, unpack it beside the install folder and hand over to
+    /// <see cref="UpdateInstaller"/>, which waits for this process to die before swapping files.
+    ///
+    /// The hash check is not optional here. An MSIX is signed and Windows refuses a package that
+    /// fails verification; a zip that overwrites GridDisplay.exe has nothing between it and the
+    /// install folder but this comparison.
+    /// </summary>
+    private async Task<UpdateApplyResult> ApplyUnpackagedZipAsync(
+        string url, string expectedSha256, IProgress<int>? progress)
+    {
+        var blocked = UpdateInstaller.BlockedReason();
+        if (blocked is not null) return new UpdateApplyResult(UpdateApplyOutcome.Failed, blocked);
+
+        string staging;
+        try
+        {
+            staging = await UpdateInstaller
+                .StageZipAsync(Http, url, expectedSha256, progress, CancellationToken.None)
+                .ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            return new UpdateApplyResult(UpdateApplyOutcome.Failed, $"업데이트를 내려받지 못했습니다: {ex.Message}");
+        }
+
+        try
+        {
+            UpdateInstaller.Launch(staging);
+        }
+        catch (Exception ex)
+        {
+            return new UpdateApplyResult(UpdateApplyOutcome.Failed, $"업데이트를 시작하지 못했습니다: {ex.Message}");
+        }
+
+        return new UpdateApplyResult(UpdateApplyOutcome.Restarting,
+            "업데이트를 적용합니다. 프로그램이 잠시 후 다시 시작됩니다.");
+    }
 
     private static HttpClient CreateClient()
     {

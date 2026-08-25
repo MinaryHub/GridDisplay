@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net.Http;
 using System.Text;
 
 namespace GridDisplay.Services;
@@ -167,6 +168,74 @@ public static class UpdateInstaller
         }
     }
 
+    /// <summary>
+    /// Fetch a package zip, verify it against <paramref name="expectedSha256"/> and unpack it.
+    /// Returns the folder holding the new build, ready for <see cref="Launch"/>.
+    ///
+    /// Refuses a mismatched hash and a package without GridDisplay.exe at its root: an install
+    /// folder must never be left unbootable, and this is the only thing standing between a
+    /// tampered download and the running application.
+    /// </summary>
+    public static async Task<string> StageZipAsync(
+        HttpClient http, string url, string expectedSha256, IProgress<int>? progress, CancellationToken ct)
+    {
+        var versionDir = Path.Combine(UpdatesRoot, "pending");
+        var filesDir = Path.Combine(versionDir, "files");
+        var zipPath = Path.Combine(versionDir, "package.zip");
+
+        // A half-finished attempt from an earlier run must never be mistaken for a good package.
+        TryDeleteDirectory(versionDir);
+        Directory.CreateDirectory(versionDir);
+
+        using (var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false))
+        {
+            response.EnsureSuccessStatusCode();
+            long total = response.Content.Headers.ContentLength ?? -1L;
+            long read = 0;
+            int lastPercent = -1;
+
+            using var source = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+            using var target = new FileStream(zipPath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true);
+
+            var buffer = new byte[81920];
+            int n;
+            while ((n = await source.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
+            {
+                await target.WriteAsync(buffer.AsMemory(0, n), ct).ConfigureAwait(false);
+                read += n;
+                if (progress is null || total <= 0) continue;
+
+                // Whole percents only: every report is marshalled onto the message loop.
+                int percent = (int)(read * 100 / total);
+                if (percent == lastPercent) continue;
+                lastPercent = percent;
+                progress.Report(percent);
+            }
+        }
+
+        string actual;
+        using (var stream = new FileStream(zipPath, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true))
+            actual = Convert.ToHexString(await System.Security.Cryptography.SHA256.HashDataAsync(stream, ct).ConfigureAwait(false));
+
+        if (!actual.Equals(expectedSha256.Trim(), StringComparison.OrdinalIgnoreCase))
+        {
+            TryDeleteDirectory(versionDir);
+            throw new InvalidDataException(
+                $"내려받은 파일이 손상되었습니다.\n기대: {expectedSha256.Trim()}\n실제: {actual}");
+        }
+
+        System.IO.Compression.ZipFile.ExtractToDirectory(zipPath, filesDir, overwriteFiles: true);
+        try { File.Delete(zipPath); } catch { }
+
+        if (!File.Exists(Path.Combine(filesDir, ExeName)))
+        {
+            TryDeleteDirectory(versionDir);
+            throw new InvalidDataException($"업데이트 패키지에 {ExeName} 이(가) 없습니다.");
+        }
+
+        return filesDir;
+    }
+
     /// <summary>Remove staging folders left behind by earlier updates. Best effort, by design.</summary>
     public static void CleanupStaging()
     {
@@ -177,8 +246,14 @@ public static class UpdateInstaller
             // The applier is still exiting out of one of these when the new build starts, so a
             // delete can fail. Whatever survives is picked up by the next launch.
             foreach (var dir in Directory.GetDirectories(UpdatesRoot))
-                UpdateService.TryDeleteDirectory(dir);
+                TryDeleteDirectory(dir);
         }
+        catch { }
+    }
+
+    internal static void TryDeleteDirectory(string path)
+    {
+        try { if (Directory.Exists(path)) Directory.Delete(path, recursive: true); }
         catch { }
     }
 

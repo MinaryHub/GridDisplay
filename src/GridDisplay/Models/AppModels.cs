@@ -137,11 +137,24 @@ public sealed class GridPreset
 /// <summary>Everything persisted between runs.</summary>
 public sealed class AppState
 {
+    /// <summary>
+    /// Bumped when a stored setting needs correcting on load. Starts at 0 so a file written
+    /// before this existed is recognised as old — a new default value could not be told apart
+    /// from an absent one.
+    /// </summary>
+    public int SettingsVersion { get; set; }
+
+    private const int CurrentSettingsVersion = 1;
+
     public List<GridPreset> Presets { get; set; } = new();
     public string? ActivePresetId { get; set; }
 
-    /// <summary>Occupy the whole monitor with no chrome at startup.</summary>
-    public bool StartFullScreen { get; set; } = true;
+    /// <summary>
+    /// Occupy the whole monitor with no chrome at startup. Off by default so a first run opens
+    /// as an ordinary window: with no title bar there is no visible way to move, resize or close
+    /// the app, which is the wrong first impression. F11 still toggles it, and the choice sticks.
+    /// </summary>
+    public bool StartFullScreen { get; set; }
     /// <summary>Stay above other windows while a cell is zoomed to the monitor.</summary>
     public bool TopMostInFullScreen { get; set; }
     /// <summary>Gap in pixels between cells; also the space the selection/hover outline is drawn in.</summary>
@@ -150,6 +163,14 @@ public sealed class AppState
     public Keys InputModeKey { get; set; } = Keys.F2;
     /// <summary>Let hidden browser cells release memory. Costs a few hundred ms when the cell is shown again.</summary>
     public bool SuspendHiddenCells { get; set; }
+
+    /// <summary>
+    /// Reload browser cells every N hours; 0 turns it off. A dashboard left open for weeks keeps
+    /// growing whether or not this app leaks — the page's own scripts and DOM see to that — and a
+    /// reload is the one cure that does not involve restarting the wall. Skipped while a cell is
+    /// zoomed or taking input, so it never interrupts anyone.
+    /// </summary>
+    public int CellRecycleHours { get; set; } = 24;
 
     /// <summary>
     /// Where to look for a new version: an .appinstaller file or a small update.json. Empty means
@@ -181,10 +202,21 @@ public sealed class AppState
 
     public void Normalize()
     {
+        if (SettingsVersion < 1)
+        {
+            // Walls set up before this ran fullscreen from the first frame, which leaves no title
+            // bar and so no visible way to move, resize or close the app. Hand the window back
+            // once; F11 still switches, and now the choice is remembered.
+            StartFullScreen = false;
+            SettingsVersion = 1;
+        }
+        SettingsVersion = Math.Max(SettingsVersion, CurrentSettingsVersion);
+
         Presets ??= new List<GridPreset>();
         if (Presets.Count == 0) Presets.Add(GridPreset.CreateDefault());
         foreach (var p in Presets) p.Normalize();
         CellGap = Math.Clamp(CellGap, 0, 64);
+        CellRecycleHours = Math.Clamp(CellRecycleHours, 0, 24 * 30);
         UpdateCheckHours = Math.Clamp(UpdateCheckHours <= 0 ? 24 : UpdateCheckHours, 1, 24 * 7);
         if (InputModeKey == Keys.None) InputModeKey = Keys.F2;
     }

@@ -21,6 +21,8 @@ public sealed class MainForm : Form
 {
     private static readonly Color BackgroundColor = Color.FromArgb(14, 14, 16);
     private static readonly Color AccentColor = Color.FromArgb(70, 160, 255);
+    /// <summary>Amber, and used nowhere else — input mode is the one state that changes what the keyboard does.</summary>
+    private static readonly Color InputModeColor = Color.FromArgb(214, 118, 20);
 
     private readonly StateStore _store = new();
     private readonly InputHook _hook = new();
@@ -35,28 +37,46 @@ public sealed class MainForm : Form
     private readonly Label _banner = new();
     private readonly System.Windows.Forms.Timer _bannerTimer = new();
     private readonly System.Windows.Forms.Timer _updateTimer = new();
+    private readonly System.Windows.Forms.Timer _maintenanceTimer = new();
+    private DateTime _lastHealthUtc = DateTime.UtcNow;
+    private DateTime _lastRecycleUtc = DateTime.UtcNow;
     private readonly ContextMenuStrip _menu = new();
+    private readonly Button _exitButton;
 
     private GridPreset _preset = null!;
     private CancellationTokenSource? _applyCts;
 
-    private int _zoomed = -1;
-    private int _selected;
-    private int _hover = -1;
+    // Written on the UI thread, read by the hook thread (and the reverse for the drag/hover
+    // fields). All are int- or bool-sized, so volatile is enough to keep the two views in step —
+    // see InputHook for why the callback runs on a thread of its own.
+    private volatile int _zoomed = -1;
+    private volatile int _selected;
+    private volatile int _hover = -1;
+    private volatile int _dragFrom = -1;
+    private volatile int _dragOver = -1;
+    private volatile bool _interactive;
+    private volatile bool _closing;
+
+    /// <summary>
+    /// The window handle, cached for the hook thread. <c>Control.Handle</c> is a Control member
+    /// and must not be touched from there — and going fullscreen changes FormBorderStyle, which
+    /// makes WinForms destroy and recreate the handle underneath. Reading it off-thread across
+    /// that recreation threw, the hook swallowed the exception, and every key stopped working
+    /// the moment a cell was zoomed.
+    /// </summary>
+    private volatile IntPtr _formHandle;
+
+    // Touched only by the hook thread, in press -> move -> release order.
     private int _pressedCell = -1;
-    private int _menuCell = -1;
-    private int _dragFrom = -1;
-    private int _dragOver = -1;
     private Point _pressPoint;
     private MouseButtons _pressButton;
-    private bool _interactive;
+
+    private int _menuCell = -1;
     private bool _fullScreen;
     private bool _barVisible;
-    private bool _closing;
     private bool _suppressCombo;
     private bool _suppressGridSpin;
     private Control[] _barItems = Array.Empty<Control>();
-    private long _lastHoverTick;
 
     private Rectangle _restoreBounds;
     private FormWindowState _restoreState = FormWindowState.Normal;
@@ -81,6 +101,12 @@ public sealed class MainForm : Form
         var screen = Screen.PrimaryScreen ?? Screen.AllScreens[0];
         Bounds = Rectangle.Inflate(screen.WorkingArea, -60, -60);
 
+        // Fullscreen has no title bar, so the toolbar is the only way out that does not go
+        // through the context menu. Coloured apart from its neighbours because it is the one
+        // button on the bar that cannot be undone.
+        _exitButton = BarButton("종료", (_, _) => Close());
+        _exitButton.BackColor = Color.FromArgb(120, 42, 42);
+
         BuildBar();
         BuildBanner();
         BuildMenu();
@@ -100,10 +126,14 @@ public sealed class MainForm : Form
 
     private async Task OnLoadedAsync()
     {
+        // Whatever a previous update left behind, before anything else claims the disk.
+        UpdateInstaller.CleanupStaging();
+
         _hook.Install();
         if (S.StartFullScreen) SetFullScreen(true);
         await LoadPresetAsync(S.ActivePreset()).ConfigureAwait(true);
         StartUpdateWatch();
+        StartMaintenance();
     }
 
     /// <summary>Swap the whole grid to <paramref name="preset"/> and bring its cells up.</summary>
@@ -178,6 +208,15 @@ public sealed class MainForm : Form
         return r;
     }
 
+    /// <summary>
+    /// Height of the input-mode warning strip, 0 in view mode.
+    ///
+    /// The strip is carved out of the top of the zoomed cell only. Fit zoom is cell width over
+    /// grid-area width, so taking height costs nothing, while insetting the sides would knock a
+    /// zoomed cell off exactly 1.0 and reflow the hosted page every time input mode is entered.
+    /// </summary>
+    private int InputStripHeight => _interactive ? Scaled(34) : 0;
+
     private void Relayout()
     {
         if (_cells.Count == 0 || _preset is null) return;
@@ -189,10 +228,13 @@ public sealed class MainForm : Form
         SuspendLayout();
         if (_zoomed >= 0 && _zoomed < _cells.Count)
         {
+            var zoomArea = Rectangle.FromLTRB(
+                area.Left, area.Top + InputStripHeight, area.Right, area.Bottom);
+
             for (int i = 0; i < _cells.Count; i++)
             {
                 bool on = i == _zoomed;
-                if (on) _cells[i].Bounds = area;
+                if (on) _cells[i].Bounds = zoomArea;
                 if (_cells[i].Visible != on) _cells[i].Visible = on;
                 if (S.SuspendHiddenCells) _cells[i].SetSuspended(!on);
             }
@@ -228,11 +270,33 @@ public sealed class MainForm : Form
         if (_barVisible) _bar.BringToFront();
         PositionBanner();
         ResumeLayout(true);
+
+        // Cells just moved, so the hook's cached copy is stale until this runs.
+        PublishHitTestMap();
+    }
+
+    /// <summary>Refresh the hook thread's copy every time WinForms hands us a new window.</summary>
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        _formHandle = Handle;
+        PublishHitTestMap();
     }
 
     protected override void OnPaint(PaintEventArgs e)
     {
         base.OnPaint(e);
+
+        // Input mode hands the keyboard to another process, so it must be obvious at a glance and
+        // stay obvious — the transient banner has faded long before the user wonders why Esc is
+        // not working. Painted rather than hosted in a Label: the strip is form-owned canvas, so
+        // it cannot be covered by the hosted window the way a sibling control could.
+        if (_interactive)
+        {
+            DrawInputModeStrip(e.Graphics);
+            return;
+        }
+
         if (_zoomed >= 0 || _cells.Count == 0) return;
 
         using var idle = new Pen(Color.FromArgb(42, 42, 48), 1);
@@ -258,6 +322,24 @@ public sealed class MainForm : Form
         }
     }
 
+    private void DrawInputModeStrip(Graphics g)
+    {
+        var area = GridArea();
+        var strip = new Rectangle(area.Left, area.Top, area.Width, InputStripHeight);
+        if (strip.Height <= 0) return;
+
+        using var fill = new SolidBrush(InputModeColor);
+        g.FillRectangle(fill, strip);
+
+        string cell = _zoomed >= 0 && _zoomed < _cells.Count ? $"{_cells[_zoomed].HeaderText} · " : string.Empty;
+        using var font = new Font(Font.FontFamily, 12f, FontStyle.Bold);
+        TextRenderer.DrawText(
+            g,
+            $"● 입력 모드 — {cell}키보드·마우스가 이 앱으로 전달됩니다 · {KeyName(S.InputModeKey)} 키로 해제",
+            font, strip, Color.White,
+            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+    }
+
     private void InvalidateCellFrame(int index)
     {
         if (index < 0 || index >= _cells.Count) return;
@@ -267,24 +349,50 @@ public sealed class MainForm : Form
 
     // ------------------------------------------------------------------ input routing
 
-    private int CellIndexAtScreen(Point screen)
+    /// <summary>
+    /// Hand work back to the UI thread from the hook thread.
+    ///
+    /// The hook now runs on its own thread, so the window can be gone by the time a callback
+    /// gets here — during shutdown especially. Swallowing that is right: the alternative is an
+    /// exception on a thread whose stall would freeze input for the whole desktop.
+    /// </summary>
+    private void Post(Action action)
     {
-        var pt = new NativeMethods.POINT { X = screen.X, Y = screen.Y };
-        var window = NativeMethods.WindowFromPoint(pt);
-        if (window == IntPtr.Zero) return -1;
-        // Dialogs, context menus and other apps live under a different root — leave them alone.
-        if (NativeMethods.GetAncestor(window, NativeMethods.GA_ROOT) != Handle) return -1;
-
-        var client = PointToClient(screen);
-        for (int i = 0; i < _cells.Count; i++)
-            if (_cells[i].Visible && _cells[i].Bounds.Contains(client)) return i;
-        return -1;
+        if (_closing) return;
+        try
+        {
+            if (IsHandleCreated) BeginInvoke(action);
+        }
+        catch (ObjectDisposedException) { }
+        catch (InvalidOperationException) { }
     }
 
-    private bool OnGlobalMouseDown(MouseButtons button, Point screen)
+    /// <summary>
+    /// Publish what the hook needs to hit-test without touching a single Control.
+    /// Called wherever the cells move or the mode changes.
+    /// </summary>
+    private void PublishHitTestMap()
+    {
+        if (!IsHandleCreated) return;
+        _formHandle = Handle;
+
+        var cells = new Rectangle[_cells.Count];
+        for (int i = 0; i < _cells.Count; i++)
+            cells[i] = _cells[i].Visible ? RectangleToScreen(_cells[i].Bounds) : Rectangle.Empty;
+
+        _hook.SetMap(new HitTestMap
+        {
+            FormHandle = Handle,
+            GridBounds = RectangleToScreen(GridArea()),
+            Cells = cells,
+            ClicksEnabled = !_closing && !_interactive && _cells.Count > 0,
+            HoverEnabled = !_closing && !_interactive && _zoomed < 0 && _cells.Count > 0,
+        });
+    }
+
+    private bool OnGlobalMouseDown(MouseButtons button, Point screen, int index)
     {
         if (_interactive || _closing) return false;
-        int index = CellIndexAtScreen(screen);
         if (index < 0) return false;
         _pressedCell = index;
         _pressPoint = screen;
@@ -292,10 +400,9 @@ public sealed class MainForm : Form
         return true;
     }
 
-    private bool OnGlobalMouseUp(MouseButtons button, Point screen)
+    private bool OnGlobalMouseUp(MouseButtons button, Point screen, int index)
     {
         if (_interactive || _closing) return false;
-        int index = CellIndexAtScreen(screen);
         int pressed = _pressedCell;
         _pressedCell = -1;
 
@@ -305,7 +412,7 @@ public sealed class MainForm : Form
         _dragOver = -1;
         if (from >= 0)
         {
-            BeginInvoke(() =>
+            Post(() =>
             {
                 InvalidateCellFrame(from);
                 InvalidateCellFrame(over);
@@ -318,7 +425,7 @@ public sealed class MainForm : Form
         if (pressed != index) return true;
 
         // The hook must return promptly; do the real work back on the message loop.
-        BeginInvoke(() =>
+        Post(() =>
         {
             if (button == MouseButtons.Right) ShowCellMenu(index, screen);
             else if (button == MouseButtons.Left) ActivateCell(index);
@@ -326,15 +433,10 @@ public sealed class MainForm : Form
         return true;
     }
 
-    private void OnGlobalMouseMove(Point screen)
+    private void OnGlobalMouseMove(Point screen, int index)
     {
+        // Throttling and the hit test both happen in the hook now; this only reacts.
         if (_interactive || _closing || _zoomed >= 0) return;
-
-        long now = Environment.TickCount64;
-        if (now - _lastHoverTick < 30) return;
-        _lastHoverTick = now;
-
-        int index = CellIndexAtScreen(screen);
 
         // A left press that travels far enough becomes a cell drag. WinForms drag-and-drop is not
         // an option here: the hosted windows belong to other processes and consume the input
@@ -348,7 +450,7 @@ public sealed class MainForm : Form
             _dragFrom = _pressedCell;
             int stale = _hover;
             _hover = -1;
-            BeginInvoke(() => InvalidateCellFrame(stale));
+            Post(() => InvalidateCellFrame(stale));
         }
 
         if (_dragFrom >= 0)
@@ -357,7 +459,7 @@ public sealed class MainForm : Form
             int previousTarget = _dragOver;
             _dragOver = index;
             int source = _dragFrom;
-            BeginInvoke(() =>
+            Post(() =>
             {
                 InvalidateCellFrame(previousTarget);
                 InvalidateCellFrame(index);
@@ -369,7 +471,7 @@ public sealed class MainForm : Form
         if (index == _hover) return;
         int previous = _hover;
         _hover = index;
-        BeginInvoke(() =>
+        Post(() =>
         {
             InvalidateCellFrame(previous);
             InvalidateCellFrame(_hover);
@@ -379,7 +481,8 @@ public sealed class MainForm : Form
     private bool OnGlobalKeyDown(Keys key)
     {
         if (_closing) return false;
-        if (NativeMethods.GetForegroundWindow() != Handle) return false;
+        // Cached: see _formHandle. Never Handle, which belongs to the UI thread.
+        if (NativeMethods.GetForegroundWindow() != _formHandle) return false;
 
         var releaseKey = S.InputModeKey;
 
@@ -389,7 +492,7 @@ public sealed class MainForm : Form
             // which plenty of apps need.
             if (key == releaseKey)
             {
-                BeginInvoke(() => SetInteractive(false));
+                Post(() => SetInteractive(false));
                 return true;
             }
             return false;
@@ -397,7 +500,7 @@ public sealed class MainForm : Form
 
         if (key == releaseKey)
         {
-            BeginInvoke(() => SetInteractive(true));
+            Post(() => SetInteractive(true));
             return true;
         }
 
@@ -410,7 +513,7 @@ public sealed class MainForm : Form
                     _dragFrom = -1;
                     _dragOver = -1;
                     _pressedCell = -1;
-                    BeginInvoke(() =>
+                    Post(() =>
                     {
                         InvalidateCellFrame(from);
                         InvalidateCellFrame(over);
@@ -420,13 +523,13 @@ public sealed class MainForm : Form
                 if (_zoomed >= 0)
                 {
                     int z = _zoomed;
-                    BeginInvoke(() => ToggleZoom(z));
+                    Post(() => ToggleZoom(z));
                     return true;
                 }
                 return false;
 
             case Keys.Enter:
-                BeginInvoke(() => ActivateCell(_selected));
+                Post(() => ActivateCell(_selected));
                 return true;
 
             case Keys.Left:
@@ -434,15 +537,15 @@ public sealed class MainForm : Form
             case Keys.Up:
             case Keys.Down:
                 if (_zoomed >= 0) return false;
-                BeginInvoke(() => MoveSelection(key));
+                Post(() => MoveSelection(key));
                 return true;
 
             case Keys.F11:
-                BeginInvoke(() => SetFullScreen(!_fullScreen));
+                Post(ToggleFullScreenByUser);
                 return true;
 
             case Keys.F1:
-                BeginInvoke(ToggleBar);
+                Post(ToggleBar);
                 return true;
         }
 
@@ -452,7 +555,7 @@ public sealed class MainForm : Form
             if (code >= Keys.D1 && code <= Keys.D9)
             {
                 int slot = code - Keys.D1;
-                BeginInvoke(() =>
+                Post(() =>
                 {
                     if (slot < S.Presets.Count) _ = LoadPresetAsync(S.Presets[slot]);
                 });
@@ -460,7 +563,7 @@ public sealed class MainForm : Form
             }
             if (code == Keys.R)
             {
-                BeginInvoke(() => CellAt(_selected)?.Reload());
+                Post(() => CellAt(_selected)?.Reload());
                 return true;
             }
         }
@@ -581,6 +684,12 @@ public sealed class MainForm : Form
         _interactive = on;
         _hook.MouseCaptureEnabled = !on;
 
+        // The warning strip is carved out of the zoomed cell, so entering or leaving input mode
+        // has to move it.
+        Relayout();
+        Invalidate();
+        PublishHitTestMap();
+
         // Keep-alive is a view-mode concept: in input mode the user's own activity holds the
         // session open, and synthetic key events would land in whatever they are typing.
         foreach (var cell in _cells) cell.SetKeepAliveActive(!on);
@@ -598,6 +707,21 @@ public sealed class MainForm : Form
             ShowBanner("보기 모드 — 클릭하면 격자로 돌아갑니다");
         }
         UpdateTitle();
+    }
+
+    /// <summary>
+    /// F11, the toolbar button and the menu item all land here, and only here does the choice
+    /// stick. <see cref="SetFullScreen"/> itself must stay silent: zooming a cell also goes
+    /// fullscreen, and that is a view state, not a preference about how the app should start.
+    /// </summary>
+    private void ToggleFullScreenByUser()
+    {
+        SetFullScreen(!_fullScreen);
+        S.StartFullScreen = _fullScreen;
+        _store.SaveDeferred();
+        ShowBanner(_fullScreen
+            ? "전체 화면 — 다음 실행에도 이 상태로 시작합니다"
+            : "창 모드 — 다음 실행에도 이 상태로 시작합니다");
     }
 
     private void SetFullScreen(bool on)
@@ -661,7 +785,7 @@ public sealed class MainForm : Form
             _presetCombo,
             BarButton("세트 관리…", (_, _) => ManagePresets()),
             BarButton("셀 설정…", (_, _) => EditCell(_selected)),
-            BarButton("전체 화면", (_, _) => SetFullScreen(!_fullScreen)),
+            BarButton("전체 화면", (_, _) => ToggleFullScreenByUser()),
             BarButton("업데이트…", (_, _) => ShowUpdateDialog()),
             BarLabel("격자", Color.FromArgb(200, 200, 210)),
             _colsSpin,
@@ -670,6 +794,8 @@ public sealed class MainForm : Form
             BarLabel("F1 도구모음 · F2 입력 모드 · F11 전체 화면 · Ctrl+1~9 세트 · 우클릭 메뉴",
                 Color.FromArgb(150, 150, 160)),
             BarLabel($"v{AppVersion.Display}", Color.FromArgb(120, 120, 130)),
+            // Last in the array only so it is added to the panel; LayoutBar pins it to the right.
+            _exitButton,
         };
         _bar.Controls.AddRange(_barItems);
 
@@ -687,26 +813,52 @@ public sealed class MainForm : Form
     {
         if (_barItems.Length == 0) return;
 
-        int pad = Scaled(10), gap = Scaled(8), height = Scaled(26);
+        int pad = Scaled(10), gap = Scaled(8);
         _bar.Height = Scaled(40);
         int x = pad;
 
         foreach (var item in _barItems)
         {
-            var size = item switch
-            {
-                ComboBox => new Size(Scaled(220), item.PreferredSize.Height),
-                // Wide enough for two digits next to the spin buttons at any scale.
-                NumericUpDown => new Size(Scaled(58), height),
-                // Measured text, not PreferredSize — a non-autosize Button reports a far wider
-                // preferred width and the row runs off the right edge.
-                Button b => new Size(TextRenderer.MeasureText(b.Text, b.Font).Width + Scaled(24), height),
-                _ => item.PreferredSize,
-            };
+            // 종료 is placed from the right edge once the rest of the row is known.
+            if (ReferenceEquals(item, _exitButton)) continue;
+            if (!BarItemShown(item)) { item.Visible = false; continue; }
+            item.Visible = true;
+
+            var size = BarItemSize(item);
             item.Bounds = new Rectangle(x, (_bar.Height - size.Height) / 2, size.Width, size.Height);
             x += size.Width + gap;
         }
+
+        // Anchored to the right corner rather than flowing with the row: it is the one control on
+        // the bar that cannot be undone, so it should not sit next to the buttons the user clicks
+        // often, and its position must not shift as the update button appears or set names grow.
+        // Math.Max keeps it from landing on top of the hint label on a narrow window.
+        var exit = BarItemSize(_exitButton);
+        _exitButton.Visible = true;
+        _exitButton.Bounds = new Rectangle(
+            Math.Max(x, ClientSize.Width - pad - exit.Width),
+            (_bar.Height - exit.Height) / 2,
+            exit.Width,
+            exit.Height);
     }
+
+    private Size BarItemSize(Control item) => item switch
+    {
+        ComboBox => new Size(Scaled(220), item.PreferredSize.Height),
+        // Wide enough for two digits next to the spin buttons at any scale.
+        NumericUpDown => new Size(Scaled(58), Scaled(26)),
+        // Measured text, not PreferredSize — a non-autosize Button reports a far wider
+        // preferred width and the row runs off the right edge.
+        Button b => new Size(TextRenderer.MeasureText(b.Text, b.Font).Width + Scaled(24), Scaled(26)),
+        _ => item.PreferredSize,
+    };
+
+    /// <summary>
+    /// Every bar item is shown; the hook is kept because a child of the hidden bar reports
+    /// <c>Visible == false</c> whatever was set, so any future gating must read a field rather
+    /// than <c>Control.Visible</c> or it would drop the whole row from the layout.
+    /// </summary>
+    private static bool BarItemShown(Control item) => true;
 
     private int Scaled(int logical) => (int)Math.Round(logical * DeviceDpi / 96.0);
 
@@ -791,7 +943,7 @@ public sealed class MainForm : Form
         _menu.Items.Add("현재 배치를 새 세트로 저장…", null, (_, _) => SaveAsNewPreset());
         _menu.Items.Add(new ToolStripSeparator());
         _menu.Items.Add("도구 모음 표시/숨김 (F1)", null, (_, _) => ToggleBar());
-        _menu.Items.Add("전체 화면 (F11)", null, (_, _) => SetFullScreen(!_fullScreen));
+        _menu.Items.Add("전체 화면 (F11)", null, (_, _) => ToggleFullScreenByUser());
         _menu.Items.Add(new ToolStripSeparator());
         _menu.Items.Add("버전 및 업데이트…", null, (_, _) => ShowUpdateDialog());
         _menu.Items.Add("종료", null, (_, _) => Close());
@@ -991,7 +1143,9 @@ public sealed class MainForm : Form
     {
         string mode = _interactive ? "입력" : _zoomed >= 0 ? "확대" : "격자";
         string cell = _zoomed >= 0 && _zoomed < _cells.Count ? $" · {_cells[_zoomed].HeaderText}" : string.Empty;
-        Text = $"Grid Display — {_preset?.Name} [{mode}]{cell}";
+        // Version stays in the title: a wall is usually read over somebody's shoulder, and
+        // this is the one place it shows without opening a dialog.
+        Text = $"Grid Display {AppVersion.Display} — {_preset?.Name} [{mode}]{cell}";
     }
 
     private static string KeyName(Keys key) => key.ToString();
@@ -1023,6 +1177,8 @@ public sealed class MainForm : Form
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
         _closing = true;
+        PublishHitTestMap();
+        _maintenanceTimer.Stop();
         _applyCts?.Cancel();
         _hook.Dispose();
 
@@ -1034,6 +1190,65 @@ public sealed class MainForm : Form
 
         _store.SaveNow();
         base.OnFormClosing(e);
+    }
+
+    // ------------------------------------------------------------------ long-run upkeep
+
+    /// <summary>
+    /// One slow timer for everything that only matters after days of uptime. Five minutes is
+    /// coarse enough to cost nothing and fine enough that the two jobs below never drift far
+    /// from the schedule the user asked for.
+    /// </summary>
+    private void StartMaintenance()
+    {
+        _maintenanceTimer.Interval = (int)TimeSpan.FromMinutes(5).TotalMilliseconds;
+        _maintenanceTimer.Tick += (_, _) =>
+        {
+            var now = DateTime.UtcNow;
+
+            if (now - _lastHealthUtc >= HealthMonitor.Interval)
+            {
+                _lastHealthUtc = now;
+                HealthMonitor.Sample($"세트 '{_preset?.Name}' · 칸 {_cells.Count}개" +
+                    (string.IsNullOrEmpty(AppPaths.ProfileName) ? string.Empty : $" · 프로필 {AppPaths.ProfileName}"));
+            }
+
+            int hours = S.CellRecycleHours;
+            if (hours > 0 && now - _lastRecycleUtc >= TimeSpan.FromHours(hours))
+            {
+                // Not while anyone is looking closely: a zoomed or interactive cell would blink.
+                // Leaving _lastRecycleUtc alone means the next tick tries again.
+                if (!_interactive && _zoomed < 0) _ = RecycleBrowserCellsAsync();
+            }
+        };
+        _maintenanceTimer.Start();
+
+        HealthMonitor.Sample("기동");
+    }
+
+    /// <summary>
+    /// Reload every browser cell, staggered. The address is already remembered, so this costs a
+    /// redraw and buys back whatever the page accumulated since the last one.
+    /// </summary>
+    private async Task RecycleBrowserCellsAsync()
+    {
+        _lastRecycleUtc = DateTime.UtcNow;
+
+        for (int i = 0; i < _cells.Count; i++)
+        {
+            if (_closing || _interactive || _zoomed >= 0) return;
+            if (i >= _preset.Cells.Count || _preset.Cells[i].Kind != CellKind.Browser) continue;
+
+            try { _cells[i].Reload(); }
+            catch { /* a cell that cannot reload reports it itself */ }
+
+            // Same reason the cells start staggered: reloading six pages at once spikes CPU
+            // and would stall input for everyone.
+            try { await Task.Delay(2000).ConfigureAwait(true); }
+            catch { return; }
+        }
+
+        HealthMonitor.Sample("브라우저 칸 재적재 완료");
     }
 
     // ------------------------------------------------------------------ updates
@@ -1084,6 +1299,7 @@ public sealed class MainForm : Form
             _hook.Dispose();
             _bannerTimer.Dispose();
             _updateTimer.Dispose();
+            _maintenanceTimer.Dispose();
             _gridResizeDebounce.Dispose();
             _menu.Dispose();
             _store.Dispose();

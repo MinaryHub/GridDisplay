@@ -26,11 +26,6 @@ dotnet publish src\GridDisplay\GridDisplay.csproj -c Release -r win-x64 --self-c
 .\tools\make-icon.ps1
 ```
 
-The icon is drawn by `tools\make-icon.ps1` rather than committed as an opaque binary, so the
-palette lives in one place. Its entries are 32-bit DIBs up to 128px and PNG only at 256: .NET's
-own `Icon` class cannot decode PNG entries, so a PNG-only file loads in Explorer and fails in
-code. Sizes at or below 24px drop to a 2×2 grid — a 3×2 wall is mush at 16px.
-
 `tools\release.ps1` and `installer\GridDisplay.iss` must both stay UTF-8 **with BOM**: Windows
 PowerShell 5.1 and Inno Setup each read a BOM-less file as ANSI and mangle every Korean string
 in it. `release.ps1` writes the stamped `.csproj` back through `File.WriteAllText` with a
@@ -188,37 +183,55 @@ this app — a dashboard's own scripts and DOM grow whether or not we are at fau
 is the one cure that does not involve restarting the wall. It is skipped while a cell is zoomed
 or taking input, and staggered for the same reason cells start staggered.
 
-**Updating is the app replacing itself.** Windows will not let a running executable overwrite
-itself, so `UpdateInstaller.Launch` starts the *staged* `GridDisplay.exe` with
-`--apply-update <pid> <installDir>` and closes the form; that second process waits for the first
-to exit, copies staging over the install folder and starts it again. `Program.Main` routes the
-switch before any form exists. The applier is the app itself rather than a `.bat` or PowerShell
-script, so there is nothing extra for antivirus to quarantine and a failure can still be
-reported — the app is a WinExe with no console, hence the log under `UpdateInstaller.UpdatesRoot`.
-Details that are deliberate, not incidental:
+**Packaging has two targets and they are not interchangeable.** `packaging/build-msix.ps1` builds
+either a signed `.msix` plus an `.appinstaller` feed for sideloading, or — with `-Store` — a
+`.msixupload` for Microsoft Store. The Store variant is *self-contained*, because the Store cannot
+install the .NET Desktop Runtime on a customer's machine, and it is *unsigned*, because Partner
+Center strips any signature and re-signs. Identity (`Name`, `Publisher`, `PublisherDisplayName`,
+`DisplayName`) is stamped from parameters rather than checked in: the Store dictates all four and
+rejects a package that differs by a character. See `packaging/README.md`.
+
+The corresponding code decision is that **a Store install disables the app's own updater rather
+than hiding it**. `AppVersion.IsStoreInstall` reads `Package.Current.SignatureKind`; when it is
+true `UpdateService` neither checks nor installs, and `UpdateForm` collapses to one button that
+opens the Store. Store policy reserves updating a Store app for the Store, so a submission with a
+reachable `PackageManager` path is a certification failure, not merely redundant work.
+
+Two traps in the packaging script, both already handled: XML is read with `XmlDocument.Load`, never
+`[xml](Get-Content -Raw)`, because Windows PowerShell decodes a BOM-less file with the system ANSI
+codepage and turns the manifest's Korean description into mojibake that no longer parses; and the
+SDK tools come from the `Microsoft.Windows.SDK.BuildTools` NuGet package (`packaging/SdkTools.proj`)
+when no Windows SDK is installed, which is the normal case on a machine that only has the .NET SDK.
+
+**Updating takes whichever road the copy was installed by, and `AppVersion.IsPackaged` is the
+fork.** A packaged build hands the job to Windows (`PackageManager`, or the Store); an unpackaged
+one — the Inno Setup installer under `installer\` — cannot, because MSIX and a plain folder are
+updated in completely different ways. So `UpdateService.ApplyAsync` splits: a feed pointing at a
+`.zip` with a `sha256` beside it is the unpackaged shape, and `UpdateInstaller` finishes that one
+itself.
+
+That second path exists because Windows will not let a running executable overwrite itself:
+`UpdateInstaller.Launch` starts the *staged* `GridDisplay.exe` with `--apply-update <pid>
+<installDir>` and quits; the second process waits for the first to exit, copies staging over the
+install folder and starts it again. `Program.Main` routes the switch before any form exists. The
+applier is the app rather than a `.bat` or PowerShell script, so there is nothing extra for
+antivirus to quarantine, and a failure can still be reported — the app is a WinExe with no
+console, hence the log under `UpdateInstaller.UpdatesRoot`. Details that are deliberate:
 
 - `UpdatesRoot` is owned by `UpdateInstaller`, not `UpdateService`. The applier's whole job is to
   report what went wrong, so its log path must not depend on the static initialisation of the
   type that may be what failed — that exact coupling once silenced the log completely.
-- `UpdateService`'s `HttpClient` is built through a `Lazy<T>`. Static field initialisers run in
-  declaration order and `CreateClient` reads `CurrentVersion`, so an eager field observes a
-  half-initialised class and throws on the very first check.
-- Versions are padded to four components before comparing. `Version` treats an absent component
-  as -1, so an unpadded "1.2.0" sorts *below* the equivalent "1.2.0.0" and the same update would
-  offer itself forever.
-- `StageAsync` refuses a package whose SHA-256 does not match the manifest, and one without
-  `GridDisplay.exe` at its root. An install folder must never be left unbootable.
+- `StageZipAsync` refuses a package whose SHA-256 does not match the feed, and one without
+  `GridDisplay.exe` at its root. MSIX is signed and Windows checks it; a zip that overwrites the
+  install folder has nothing between it and the running app but that comparison.
+- `BlockedReason` refuses to update while another copy runs from the same install folder. The
+  applier waits only for the process that launched it, so the others would still hold
+  `GridDisplay.dll` open and the copy would fail halfway.
 - The staged copy cannot delete the folder it runs from, so `CleanupStaging` defers that to the
   next startup and ignores whatever it cannot remove.
-- A failed check is silent unless the user asked for it. An unattended wall must not sit on a
-  modal dialog because the network blipped.
-- The toolbar's update button is gated on the `_pendingUpdate` field, never on `Control.Visible`
-  — a child of the hidden toolbar reports `Visible == false` whatever was set, so reading it back
-  in `LayoutBar` would drop every item from the layout.
-- `installer\GridDisplay.iss` installs per-user into `{localappdata}\Programs\GridDisplay` with
-  `PrivilegesRequired=lowest`, and that is a consequence of the above rather than a preference:
-  under Program Files the copy step needs admin, so every update would stall on a prompt an
-  unattended wall cannot answer. Moving the install location breaks self-update.
+- The Inno installer puts the app in `{localappdata}\Programs` with `PrivilegesRequired=lowest`,
+  and that is a consequence of the above rather than a preference: under Program Files the copy
+  step needs admin, so every update would stall on a prompt an unattended wall cannot answer.
 - Inside the installer's `[Code]` section, braces are written **singly**. The `{{` doubling used
   in `[Setup]`/`[Files]` is constant-expansion escaping, which does not apply there — and a `{`
   inside a `{ ... }` comment ends it early, which is its own way to break the compile.
