@@ -23,14 +23,16 @@ public sealed class StateStore : IDisposable
 
     public AppState State { get; private set; } = new();
 
-    public static string RootDirectory { get; } = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "GridDisplay");
+    public static string RootDirectory => AppPaths.RoamingRoot;
 
-    public static string StatePath { get; } = Path.Combine(RootDirectory, "state.json");
+    public static string StatePath => Path.Combine(RootDirectory, "state.json");
 
-    /// <summary>Shared WebView2 user-data folder. One folder keeps every browser cell in a single browser process.</summary>
-    public static string WebViewDataDirectory { get; } = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "GridDisplay", "WebView2");
+    /// <summary>
+    /// WebView2 user-data folder. One folder keeps every browser cell of *this* copy in a single
+    /// browser process; <see cref="AppPaths"/> keeps separate copies out of each other's, so one
+    /// wall's browser cannot take the other two down with it.
+    /// </summary>
+    public static string WebViewDataDirectory => Path.Combine(AppPaths.LocalRoot, "WebView2");
 
     public StateStore()
     {

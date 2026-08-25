@@ -1,0 +1,112 @@
+using System.Diagnostics;
+using System.Text;
+using GridDisplay.Interop;
+
+namespace GridDisplay.Services;
+
+/// <summary>
+/// Writes a one-line resource snapshot on a slow timer.
+///
+/// A wall that has been up for three weeks either drifts or it does not, and "it feels slow
+/// lately" is not something you can act on. Working set, handle count and GC heap over time turn
+/// that into a trend you can read at a glance — and, just as usefully, rule out.
+///
+/// Deliberately boring: one line every half hour, a capped file, and every failure swallowed.
+/// Diagnostics that can break the thing they observe are worse than none.
+/// </summary>
+public static class HealthMonitor
+{
+    private const long MaxLogBytes = 512 * 1024;
+
+    private static readonly DateTime StartedUtc = DateTime.UtcNow;
+
+    public static string LogPath => Path.Combine(AppPaths.LocalRoot, "health.log");
+
+    /// <summary>How often <see cref="Sample"/> is worth calling. Long: this is a trend, not a graph.</summary>
+    public static TimeSpan Interval => TimeSpan.FromMinutes(30);
+
+    /// <summary>
+    /// Record one snapshot. <paramref name="note"/> carries whatever the caller knows that the
+    /// process itself does not — cell counts, the open set.
+    /// </summary>
+    public static void Sample(string note)
+    {
+        try
+        {
+            using var self = Process.GetCurrentProcess();
+            self.Refresh();
+
+            // Read the start time into a local first: touching StartedUtc is what runs the static
+            // initialiser, and evaluating UtcNow before that made the very first sample negative.
+            var started = StartedUtc;
+            var uptime = DateTime.UtcNow - started;
+            long working = self.WorkingSet64 / (1024 * 1024);
+            long priv = self.PrivateMemorySize64 / (1024 * 1024);
+            long managed = GC.GetTotalMemory(false) / (1024 * 1024);
+            int handles = self.HandleCount;
+            int threads = self.Threads.Count;
+
+            // Browser cells live in WebView2's own processes, so this process's numbers alone
+            // would hide the memory that actually matters. Counted machine-wide and labelled as
+            // such: telling our renderers from another app's would need the command line of every
+            // process, and when several walls share a machine the total is the number that
+            // decides whether the machine starts thrashing anyway.
+            int webview = 0;
+            long webviewMb = 0;
+            foreach (var p in Process.GetProcessesByName("msedgewebview2"))
+            {
+                using (p)
+                {
+                    webview++;
+                    try { webviewMb += p.WorkingSet64 / (1024 * 1024); } catch { }
+                }
+            }
+
+            // The symptom being chased is the whole desktop stalling, and that is usually memory
+            // pressure rather than anything this process is doing on its own.
+            string memory = "?";
+            var status = new NativeMethods.MEMORYSTATUSEX
+            {
+                dwLength = (uint)System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.MEMORYSTATUSEX>(),
+            };
+            if (NativeMethods.GlobalMemoryStatusEx(ref status))
+                memory = $"{status.ullAvailPhys / (1024 * 1024)}MB 남음 / 사용률 {status.dwMemoryLoad}%";
+
+            Write($"가동 {uptime.TotalHours:F1}시간 · 작업셋 {working}MB · 전용 {priv}MB · 관리힙 {managed}MB · "
+                + $"핸들 {handles} · 스레드 {threads} · WebView2(전체) {webview}개 {webviewMb}MB · "
+                + $"시스템 메모리 {memory} · {note}");
+        }
+        catch
+        {
+        }
+    }
+
+    private static void Write(string message)
+    {
+        try
+        {
+            Directory.CreateDirectory(AppPaths.LocalRoot);
+            RollIfLarge();
+            File.AppendAllText(
+                LogPath,
+                $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] pid {Environment.ProcessId} {message}{Environment.NewLine}",
+                Encoding.UTF8);
+        }
+        catch
+        {
+        }
+    }
+
+    private static void RollIfLarge()
+    {
+        try
+        {
+            var info = new FileInfo(LogPath);
+            if (!info.Exists || info.Length < MaxLogBytes) return;
+            var old = LogPath + ".1";
+            if (File.Exists(old)) File.Delete(old);
+            File.Move(LogPath, old);
+        }
+        catch { }
+    }
+}
