@@ -172,6 +172,16 @@ public sealed class UpdateForm : Form
         SettingsChanged = true;
     }
 
+    /// <summary>
+    /// Whether this build can finish the install on its own. An unpackaged copy can, but only
+    /// when the feed offers a .zip with a hash beside it — the shape the release script produces,
+    /// and the only one UpdateInstaller will unpack over the install folder.
+    /// </summary>
+    private static bool CanReplaceItself(UpdateCheckResult found) =>
+        !AppVersion.IsPackaged
+        && !string.IsNullOrWhiteSpace(found.Sha256)
+        && (found.Source ?? string.Empty).EndsWith(".zip", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>True once the dialog touched <see cref="AppState"/>; the caller turns it into a save.</summary>
     public bool SettingsChanged { get; private set; }
 
@@ -238,19 +248,20 @@ public sealed class UpdateForm : Form
         }
 
         _found = result is { Status: UpdateStatus.Available } ? result : null;
-        // An unpackaged build can still find and download an update, it just cannot install it
-        // itself — so the buttons stay live and say what they will do in the result message.
-        _installLater.Enabled = _found is not null && AppVersion.IsPackaged;
-        _installNow.Enabled = _found is not null && AppVersion.IsPackaged;
+
+        // Three shapes, and the buttons have to say which one applies. A packaged build hands the
+        // job to Windows; an unpackaged build whose feed points at a hashed .zip replaces its own
+        // install folder; anything else can only put the installer in front of the user.
+        bool selfInstalls = AppVersion.IsPackaged || (_found is not null && CanReplaceItself(_found));
+        _installNow.Enabled = _found is not null && selfInstalls;
+        _installLater.Enabled = _found is not null && (AppVersion.IsPackaged || !selfInstalls);
         _installLater.Text = AppVersion.IsPackaged ? "설치 (다음 실행 시 적용)" : "설치 파일 열기";
-        if (!AppVersion.IsPackaged) _installLater.Enabled = _found is not null;
+        _installNow.Text = AppVersion.IsPackaged ? "설치 후 다시 시작" : "지금 설치하고 다시 시작";
 
         if (result is null)
         {
             _status.ForeColor = ForeColor;
-            _status.Text = AppVersion.IsPackaged
-                ? "'지금 확인'을 눌러 새 버전을 확인하세요."
-                : "MSIX 패키지로 설치하면 앱이 스스로 업데이트할 수 있습니다.";
+            _status.Text = "'지금 확인'을 눌러 새 버전을 확인하세요.";
             return;
         }
 

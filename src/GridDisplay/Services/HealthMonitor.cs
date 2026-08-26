@@ -16,11 +16,14 @@ namespace GridDisplay.Services;
 /// </summary>
 public static class HealthMonitor
 {
+    private static string LocalRoot { get; } = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "GridDisplay");
+
     private const long MaxLogBytes = 512 * 1024;
 
     private static readonly DateTime StartedUtc = DateTime.UtcNow;
 
-    public static string LogPath => Path.Combine(AppPaths.LocalRoot, "health.log");
+    public static string LogPath => Path.Combine(LocalRoot, "health.log");
 
     /// <summary>How often <see cref="Sample"/> is worth calling. Long: this is a trend, not a graph.</summary>
     public static TimeSpan Interval => TimeSpan.FromMinutes(30);
@@ -85,7 +88,7 @@ public static class HealthMonitor
     {
         try
         {
-            Directory.CreateDirectory(AppPaths.LocalRoot);
+            Directory.CreateDirectory(LocalRoot);
             RollIfLarge();
             File.AppendAllText(
                 LogPath,

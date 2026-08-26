@@ -19,6 +19,9 @@ namespace GridDisplay.Services;
 /// </summary>
 public static class UpdateInstaller
 {
+    private static string LocalRoot { get; } = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "GridDisplay");
+
     public const string ApplySwitch = "--apply-update";
     public const string ExeName = "GridDisplay.exe";
 
@@ -31,7 +34,7 @@ public static class UpdateInstaller
     /// wrong, so its log path must not depend on the static initialisation of a type that may
     /// itself be what failed.
     /// </summary>
-    public static string UpdatesRoot => Path.Combine(AppPaths.LocalRoot, "Updates");
+    public static string UpdatesRoot => Path.Combine(LocalRoot, "Updates");
 
     private static string LogPath => Path.Combine(UpdatesRoot, "apply.log");
 

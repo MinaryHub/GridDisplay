@@ -16,6 +16,9 @@ namespace GridDisplay.Services;
 /// </summary>
 public static class HookDiagnostics
 {
+    private static string LocalRoot { get; } = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "GridDisplay");
+
     /// <summary>A callback slower than this is worth knowing about; typical is a few microseconds.</summary>
     private const double SlowMilliseconds = 15.0;
 
@@ -31,7 +34,7 @@ public static class HookDiagnostics
     private static string _worstWhat = string.Empty;
     private static DateTime _lastWriteUtc = DateTime.MinValue;
 
-    public static string LogPath => Path.Combine(AppPaths.LocalRoot, "input-hook.log");
+    public static string LogPath => Path.Combine(LocalRoot, "input-hook.log");
 
     public static long Timestamp() => Stopwatch.GetTimestamp();
 
@@ -81,7 +84,7 @@ public static class HookDiagnostics
     {
         try
         {
-            Directory.CreateDirectory(AppPaths.LocalRoot);
+            Directory.CreateDirectory(LocalRoot);
             RollIfLarge();
             File.AppendAllText(
                 LogPath,

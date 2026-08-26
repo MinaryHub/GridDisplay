@@ -134,8 +134,12 @@ public sealed class GridPreset
     }
 }
 
-/// <summary>Everything persisted between runs.</summary>
-public sealed class AppState
+/// <summary>
+/// App-wide preferences, kept in settings.json. Sets are NOT in here: each one lives in its own
+/// file so that two copies of the app showing different sets never write over each other. See
+/// <see cref="Services.SetStore"/>.
+/// </summary>
+public class AppState
 {
     /// <summary>
     /// Bumped when a stored setting needs correcting on load. Starts at 0 so a file written
@@ -144,10 +148,13 @@ public sealed class AppState
     /// </summary>
     public int SettingsVersion { get; set; }
 
-    private const int CurrentSettingsVersion = 1;
+    private const int CurrentSettingsVersion = 2;
 
-    public List<GridPreset> Presets { get; set; } = new();
-    public string? ActivePresetId { get; set; }
+    /// <summary>
+    /// Set to open when no set is named on the command line. Only meaningful for a single copy;
+    /// a wall that runs several passes --set to each one instead.
+    /// </summary>
+    public string LastSetId { get; set; } = string.Empty;
 
     /// <summary>
     /// Occupy the whole monitor with no chrome at startup. Off by default so a first run opens
@@ -170,7 +177,21 @@ public sealed class AppState
     /// reload is the one cure that does not involve restarting the wall. Skipped while a cell is
     /// zoomed or taking input, so it never interrupts anyone.
     /// </summary>
-    public int CellRecycleHours { get; set; } = 24;
+    public int CellRecycleHours { get; set; } = 6;
+
+    /// <summary>
+    /// Ceiling on the JavaScript heap of each page, in MB; 0 removes it. Without a ceiling a
+    /// dashboard that appends to a chart all night simply keeps growing — there is nothing to
+    /// make it collect. With one it collects instead, inside the budget.
+    /// </summary>
+    public int BrowserHeapLimitMB { get; set; } = 256;
+
+    /// <summary>
+    /// Run the browser lean: Chromium's low-memory heuristics plus a standing request to trim.
+    /// A wall is the case these were written for — the pages are watched, never touched, so
+    /// trading a little responsiveness for memory is free.
+    /// </summary>
+    public bool BrowserMemorySaver { get; set; } = true;
 
     /// <summary>
     /// Where to look for a new version: an .appinstaller file or a small update.json. Empty means
@@ -184,24 +205,32 @@ public sealed class AppState
     /// <summary>Last successful check, so a restarted wall does not re-check straight away.</summary>
     public DateTime? LastUpdateCheckUtc { get; set; }
 
-    public GridPreset ActivePreset()
+    /// <summary>
+    /// Chromium switches for the shared browser process, built from the memory settings.
+    ///
+    /// These reach the browser only through whichever cell creates it first: every cell in this
+    /// process shares one user-data folder and therefore one browser. Two copies of the app
+    /// asking for different switches against that folder is an error, so every copy has to
+    /// compute the same string — which is why this is derived from settings and nothing else.
+    /// </summary>
+    public string BrowserArguments()
     {
-        var found = Presets.FirstOrDefault(p => p.Id == ActivePresetId);
-        if (found is null)
-        {
-            found = Presets.FirstOrDefault();
-            if (found is null)
-            {
-                found = GridPreset.CreateDefault();
-                Presets.Add(found);
-            }
-            ActivePresetId = found.Id;
-        }
-        return found;
+        var parts = new List<string>();
+        if (BrowserMemorySaver) parts.Add("--enable-low-end-device-mode");
+        if (BrowserHeapLimitMB > 0) parts.Add($"--js-flags=--max-old-space-size={BrowserHeapLimitMB}");
+        return string.Join(' ', parts);
     }
 
     public void Normalize()
     {
+        if (SettingsVersion < 2 && CellRecycleHours == 24)
+        {
+            // 24 hours was the old default and it never fired on a wall that froze inside 13.
+            // Only the untouched default is lowered; a deliberate 24 elsewhere is left alone.
+            CellRecycleHours = 6;
+        }
+        SettingsVersion = Math.Max(SettingsVersion, 0);
+
         if (SettingsVersion < 1)
         {
             // Walls set up before this ran fullscreen from the first frame, which leaves no title
@@ -212,11 +241,10 @@ public sealed class AppState
         }
         SettingsVersion = Math.Max(SettingsVersion, CurrentSettingsVersion);
 
-        Presets ??= new List<GridPreset>();
-        if (Presets.Count == 0) Presets.Add(GridPreset.CreateDefault());
-        foreach (var p in Presets) p.Normalize();
         CellGap = Math.Clamp(CellGap, 0, 64);
         CellRecycleHours = Math.Clamp(CellRecycleHours, 0, 24 * 30);
+        // 0 is "no ceiling"; anything else has to be big enough for a page to actually run in.
+        if (BrowserHeapLimitMB != 0) BrowserHeapLimitMB = Math.Clamp(BrowserHeapLimitMB, 64, 4096);
         UpdateCheckHours = Math.Clamp(UpdateCheckHours <= 0 ? 24 : UpdateCheckHours, 1, 24 * 7);
         if (InputModeKey == Keys.None) InputModeKey = Keys.F2;
     }

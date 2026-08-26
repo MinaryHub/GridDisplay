@@ -139,6 +139,16 @@ public sealed class CellHost : Panel
         }
     }
 
+    /// <summary>
+    /// Chromium switches for the shared browser process, and whether to keep asking it to trim.
+    /// Static because that is what they are: every browser cell in this process ends up in one
+    /// browser, and only the cell that creates it gets a say in how it starts. Set once from the
+    /// settings before any cell comes up — see AppState.BrowserArguments.
+    /// </summary>
+    public static string BrowserArguments { get; set; } = string.Empty;
+
+    public static bool TrimBrowserMemory { get; set; }
+
     private async Task StartBrowserAsync(CellConfig config, CancellationToken ct)
     {
         var view = new WebView2
@@ -147,9 +157,10 @@ public sealed class CellHost : Panel
             DefaultBackgroundColor = Color.FromArgb(24, 24, 27),
             CreationProperties = new CoreWebView2CreationProperties
             {
-                UserDataFolder = StateStore.WebViewDataDirectory,
+                UserDataFolder = SetStore.WebViewDataDirectory,
                 // Per-cell profiles let two cells stay signed in to the same site as different users.
                 ProfileName = string.IsNullOrWhiteSpace(config.ProfileName) ? null : config.ProfileName,
+                AdditionalBrowserArguments = BrowserArguments,
             },
         };
         _web = view;
@@ -159,6 +170,15 @@ public sealed class CellHost : Panel
         try
         {
             await view.EnsureCoreWebView2Async().ConfigureAwait(true);
+
+            // A standing "keep this lean" request. Unlike the switches above this is per-cell and
+            // can be set at any time, so it applies even to cells that joined an already-running
+            // browser — which, after the first one, is all of them.
+            if (TrimBrowserMemory)
+            {
+                try { view.CoreWebView2.MemoryUsageTargetLevel = CoreWebView2MemoryUsageTargetLevel.Low; }
+                catch { /* older runtime: the switches above still apply */ }
+            }
         }
         catch (Exception ex)
         {

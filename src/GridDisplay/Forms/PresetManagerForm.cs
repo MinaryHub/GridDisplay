@@ -1,3 +1,4 @@
+using GridDisplay.Services;
 using GridDisplay.Models;
 
 namespace GridDisplay.Forms;
@@ -5,7 +6,7 @@ namespace GridDisplay.Forms;
 /// <summary>Manage saved sets: create, duplicate, rename, resize the grid, delete, apply.</summary>
 public sealed class PresetManagerForm : Form
 {
-    private readonly AppState _state;
+    private readonly SetStore _store;
     private readonly ListBox _list = new() { IntegralHeight = false };
     private readonly TextBox _name = new();
     private readonly NumericUpDown _cols = new() { Minimum = 1, Maximum = 12, Value = 3 };
@@ -28,9 +29,9 @@ public sealed class PresetManagerForm : Form
     private GridPreset? _resizeTarget;
     private int _resizeCols, _resizeRows;
 
-    public PresetManagerForm(AppState state)
+    public PresetManagerForm(SetStore store)
     {
-        _state = state;
+        _store = store;
         Text = "세트 관리";
         StartPosition = FormStartPosition.CenterParent;
         FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -90,12 +91,12 @@ public sealed class PresetManagerForm : Form
         AcceptButton = apply;
         CancelButton = close;
 
-        Refill(_state.ActivePreset().Id);
+        Refill(_store.Sets.Count > 0 ? _store.Sets[0].Id : null);
     }
 
     /// <summary>The set the user chose to open, when the dialog returns OK.</summary>
-    public GridPreset? Selected => _list.SelectedIndex >= 0 && _list.SelectedIndex < _state.Presets.Count
-        ? _state.Presets[_list.SelectedIndex]
+    public GridPreset? Selected => _list.SelectedIndex >= 0 && _list.SelectedIndex < _store.Sets.Count
+        ? _store.Sets[_list.SelectedIndex]
         : null;
 
     private Button Button(string text, int x, int y, EventHandler onClick)
@@ -111,8 +112,8 @@ public sealed class PresetManagerForm : Form
     {
         _loading = true;
         _list.Items.Clear();
-        foreach (var p in _state.Presets) _list.Items.Add(RowLabel(p));
-        int index = Math.Max(0, _state.Presets.FindIndex(p => p.Id == selectId));
+        foreach (var p in _store.Sets) _list.Items.Add(RowLabel(p));
+        int index = Math.Max(0, _store.Sets.ToList().FindIndex(p => p.Id == selectId));
         if (_list.Items.Count > 0) _list.SelectedIndex = Math.Min(index, _list.Items.Count - 1);
         _loading = false;
         LoadSelected();
@@ -192,7 +193,7 @@ public sealed class PresetManagerForm : Form
     /// <summary>Repaint one row's label without disturbing the selection or the editor fields.</summary>
     private void RefreshRow(GridPreset p)
     {
-        int index = _state.Presets.IndexOf(p);
+        int index = _store.Sets.ToList().IndexOf(p);
         if (index < 0 || index >= _list.Items.Count) return;
 
         int selected = _list.SelectedIndex;
@@ -225,8 +226,8 @@ public sealed class PresetManagerForm : Form
     {
         FlushResize();
         var p = GridPreset.CreateDefault();
-        p.Name = $"세트 {_state.Presets.Count + 1}";
-        _state.Presets.Add(p);
+        p.Name = $"세트 {_store.Sets.Count + 1}";
+        _store.Add(p);
         Refill(p.Id);
     }
 
@@ -236,7 +237,7 @@ public sealed class PresetManagerForm : Form
         var p = Selected;
         if (p is null) return;
         var copy = p.Duplicate(p.Name + " 사본");
-        _state.Presets.Add(copy);
+        _store.Add(copy);
         Refill(copy.Id);
     }
 
@@ -245,7 +246,7 @@ public sealed class PresetManagerForm : Form
         FlushResize();
         var p = Selected;
         if (p is null) return;
-        if (_state.Presets.Count <= 1)
+        if (_store.Sets.Count <= 1)
         {
             MessageBox.Show(this, "마지막 세트는 삭제할 수 없습니다.", "확인", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
@@ -253,8 +254,8 @@ public sealed class PresetManagerForm : Form
         if (MessageBox.Show(this, $"'{p.Name}' 세트를 삭제할까요?", "삭제", MessageBoxButtons.YesNo, MessageBoxIcon.Question)
             != DialogResult.Yes) return;
 
-        _state.Presets.Remove(p);
-        Refill(_state.Presets[0].Id);
+        _store.Delete(p);
+        Refill(_store.Sets.Count > 0 ? _store.Sets[0].Id : null);
     }
 
     /// <summary>A pending resize must survive the dialog closing, however it is dismissed.</summary>

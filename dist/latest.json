@@ -1,7 +1,7 @@
 ﻿{
-    "version":  "1.0.0",
-    "url":  "https://github.com/knoxxr/GridDisplay/releases/download/v1.0.0/GridDisplay-1.0.0.zip",
-    "sha256":  "A57019A685A450D652B3820227B490EAC4B3414611591D98CE5F4B7D03C5E4A3",
-    "notes":  "통합 빌드",
-    "published":  "2026-08-25"
+    "version":  "1.0.2",
+    "url":  "https://github.com/knoxxr/GridDisplay/releases/download/v1.0.2/GridDisplay-1.0.2.zip",
+    "sha256":  "9CBB5D6FA042411EB93E3A7D39E25FF0372C04052AEC7700A2FED713FD91D2B8",
+    "notes":  "웹뷰 메모리 절약 옵션, 새로 고침 기본 6시간",
+    "published":  "2026-08-26"
 }

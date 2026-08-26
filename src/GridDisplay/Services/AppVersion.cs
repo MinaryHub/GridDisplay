@@ -72,7 +72,10 @@ public static class AppVersion
         ? "Microsoft Store에서 설치됨 — 업데이트는 Store가 관리합니다"
         : IsPackaged
             ? "MSIX 패키지로 설치됨"
-            : "MSIX 패키지가 아닌 실행 파일 — 자동 업데이트를 사용할 수 없습니다";
+            // Not "cannot update": an unpackaged build replaces its own install folder when the
+            // feed offers a hashed .zip. Whether this particular feed does is only known after a
+            // check, so the wording stays about where it came from, not what it can do.
+            : "설치 프로그램(.exe)으로 설치됨";
 
     private static bool SafeHasPackageIdentity()
     {

@@ -24,7 +24,7 @@ public sealed class MainForm : Form
     /// <summary>Amber, and used nowhere else — input mode is the one state that changes what the keyboard does.</summary>
     private static readonly Color InputModeColor = Color.FromArgb(214, 118, 20);
 
-    private readonly StateStore _store = new();
+    private readonly SetStore _store = new();
     private readonly InputHook _hook = new();
     private readonly List<CellHost> _cells = new();
     private readonly UpdateService _updates;
@@ -120,7 +120,33 @@ public sealed class MainForm : Form
         Resize += (_, _) => Relayout();
     }
 
-    private AppState S => _store.State;
+    private AppState S => _store.Settings;
+
+    /// <summary>
+    /// Which set to open. A wall that runs several copies names one per shortcut
+    /// (<c>GridDisplay.exe --set "기업 관제"</c>); a single copy reopens whatever it had last.
+    /// Naming it also stops that copy from writing the shared "last set" preference, which is
+    /// the one thing three copies would otherwise still fight over.
+    /// </summary>
+    private GridPreset StartingSet()
+    {
+        var wanted = Program.RequestedSet;
+        if (!string.IsNullOrWhiteSpace(wanted))
+        {
+            var named = _store.Sets.FirstOrDefault(
+                p => string.Equals(p.Name, wanted, StringComparison.CurrentCultureIgnoreCase));
+            if (named is not null) { _setFromCommandLine = true; return named; }
+
+            // Named a set that does not exist yet: make it rather than silently opening another.
+            var created = _store.Add(new GridPreset { Name = wanted.Trim() });
+            _setFromCommandLine = true;
+            return created;
+        }
+
+        return _store.Sets.FirstOrDefault(p => p.Id == S.LastSetId) ?? _store.Sets[0];
+    }
+
+    private bool _setFromCommandLine;
 
     // ------------------------------------------------------------------ startup
 
@@ -129,9 +155,14 @@ public sealed class MainForm : Form
         // Whatever a previous update left behind, before anything else claims the disk.
         UpdateInstaller.CleanupStaging();
 
+        // Before any cell exists: the first browser cell to start is the one that configures the
+        // shared browser process, and it reads these.
+        CellHost.BrowserArguments = S.BrowserArguments();
+        CellHost.TrimBrowserMemory = S.BrowserMemorySaver;
+
         _hook.Install();
         if (S.StartFullScreen) SetFullScreen(true);
-        await LoadPresetAsync(S.ActivePreset()).ConfigureAwait(true);
+        await LoadPresetAsync(StartingSet()).ConfigureAwait(true);
         StartUpdateWatch();
         StartMaintenance();
     }
@@ -145,7 +176,11 @@ public sealed class MainForm : Form
 
         preset.Normalize();
         _preset = preset;
-        S.ActivePresetId = preset.Id;
+        if (!_setFromCommandLine)
+        {
+            S.LastSetId = preset.Id;
+            _store.SaveSettings();
+        }
 
         if (_interactive) SetInteractive(false);
         _zoomed = -1;
@@ -176,7 +211,7 @@ public sealed class MainForm : Form
         UpdatePresetCombo();
         UpdateGridSpin();
         UpdateTitle();
-        _store.SaveDeferred();
+        _store.SaveSet(_preset);
 
         // Content comes up staggered: the window is already painted and clickable, and a
         // simultaneous launch of six browsers/processes would spike CPU and stall input.
@@ -195,7 +230,8 @@ public sealed class MainForm : Form
 
     private void OnCellStateChanged(CellHost cell)
     {
-        _store.SaveDeferred();
+        // A browser reporting its address, not a user edit — let a redirect chain settle.
+        _store.SaveSetSoon(_preset);
         if (cell.Index == _zoomed) UpdateTitle();
     }
 
@@ -557,7 +593,7 @@ public sealed class MainForm : Form
                 int slot = code - Keys.D1;
                 Post(() =>
                 {
-                    if (slot < S.Presets.Count) _ = LoadPresetAsync(S.Presets[slot]);
+                    if (slot < _store.Sets.Count) _ = LoadPresetAsync(_store.Sets[slot]);
                 });
                 return true;
             }
@@ -638,7 +674,7 @@ public sealed class MainForm : Form
 
         _selected = b;
         _hover = -1;
-        _store.SaveDeferred();
+        _store.SaveSet(_preset);
         Relayout();
         Invalidate();
         UpdateTitle();
@@ -718,7 +754,7 @@ public sealed class MainForm : Form
     {
         SetFullScreen(!_fullScreen);
         S.StartFullScreen = _fullScreen;
-        _store.SaveDeferred();
+        _store.SaveSettings();
         ShowBanner(_fullScreen
             ? "전체 화면 — 다음 실행에도 이 상태로 시작합니다"
             : "창 모드 — 다음 실행에도 이 상태로 시작합니다");
@@ -764,8 +800,8 @@ public sealed class MainForm : Form
         {
             if (_suppressCombo) return;
             int i = _presetCombo.SelectedIndex;
-            if (i >= 0 && i < S.Presets.Count && S.Presets[i].Id != _preset.Id)
-                _ = LoadPresetAsync(S.Presets[i]);
+            if (i >= 0 && i < _store.Sets.Count && _store.Sets[i].Id != _preset.Id)
+                _ = LoadPresetAsync(_store.Sets[i]);
         };
 
         _colsSpin.ValueChanged += (_, _) => QueueGridResize();
@@ -992,7 +1028,7 @@ public sealed class MainForm : Form
         }
 
         _preset.Cells[index] = updated;
-        _store.SaveDeferred();
+        _store.SaveSet(_preset);
         UpdateTitle();
         Invalidate();
 
@@ -1012,7 +1048,7 @@ public sealed class MainForm : Form
         if (index < 0 || index >= _cells.Count) return;
         var empty = new CellConfig();
         _preset.Cells[index] = empty;
-        _store.SaveDeferred();
+        _store.SaveSet(_preset);
         try { await _cells[index].ApplyAsync(empty).ConfigureAwait(true); }
         catch { }
         Invalidate();
@@ -1053,7 +1089,7 @@ public sealed class MainForm : Form
         }
 
         _preset.Resize(cols, rows);
-        _store.SaveDeferred();
+        _store.SaveSet(_preset);
         ShowBanner($"격자 {cols}×{rows}");
         _ = LoadPresetAsync(_preset);
     }
@@ -1084,13 +1120,13 @@ public sealed class MainForm : Form
 
         GridPreset? chosen;
         DialogResult result;
-        using (var dialog = new PresetManagerForm(S))
+        using (var dialog = new PresetManagerForm(_store))
         {
             result = dialog.ShowDialog(this);
             chosen = dialog.Selected;
         }
 
-        _store.SaveDeferred();
+        _store.SaveSet(_preset);
         UpdatePresetCombo();
         UpdateGridSpin();
         UpdateTitle();
@@ -1101,11 +1137,11 @@ public sealed class MainForm : Form
             return;
         }
 
-        var open = S.Presets.FirstOrDefault(p => p.Id == openId);
+        var open = _store.Sets.FirstOrDefault(p => p.Id == openId);
         if (open is not null && (open.Columns != openCols || open.Rows != openRows))
             _ = LoadPresetAsync(open);
         else if (open is null)
-            _ = LoadPresetAsync(S.ActivePreset());
+            _ = LoadPresetAsync(StartingSet());
     }
 
     private void SaveAsNewPreset()
@@ -1113,9 +1149,7 @@ public sealed class MainForm : Form
         var name = Prompt("새 세트 이름", _preset.Name + " 사본");
         if (string.IsNullOrWhiteSpace(name)) return;
 
-        var copy = _preset.Duplicate(name.Trim());
-        S.Presets.Add(copy);
-        _store.SaveDeferred();
+        var copy = _store.Add(_preset.Duplicate(name.Trim()));
         UpdatePresetCombo();
         ShowBanner($"'{copy.Name}' 세트로 저장했습니다");
     }
@@ -1124,8 +1158,8 @@ public sealed class MainForm : Form
     {
         _suppressCombo = true;
         _presetCombo.Items.Clear();
-        foreach (var p in S.Presets) _presetCombo.Items.Add($"{p.Name}  ({p.Columns}×{p.Rows})");
-        int index = S.Presets.FindIndex(p => p.Id == _preset?.Id);
+        foreach (var p in _store.Sets) _presetCombo.Items.Add($"{p.Name}  ({p.Columns}×{p.Rows})");
+        int index = _store.Sets.ToList().FindIndex(p => p.Id == _preset?.Id);
         if (index >= 0) _presetCombo.SelectedIndex = index;
         _suppressCombo = false;
     }
@@ -1178,6 +1212,8 @@ public sealed class MainForm : Form
     {
         _closing = true;
         PublishHitTestMap();
+        _store.SaveSet(_preset);
+        _store.SaveSettings();
         _maintenanceTimer.Stop();
         _applyCts?.Cancel();
         _hook.Dispose();
@@ -1188,7 +1224,7 @@ public sealed class MainForm : Form
             cell.Release();
         }
 
-        _store.SaveNow();
+        _store.SaveSet(_preset);
         base.OnFormClosing(e);
     }
 
@@ -1210,7 +1246,7 @@ public sealed class MainForm : Form
             {
                 _lastHealthUtc = now;
                 HealthMonitor.Sample($"세트 '{_preset?.Name}' · 칸 {_cells.Count}개" +
-                    (string.IsNullOrEmpty(AppPaths.ProfileName) ? string.Empty : $" · 프로필 {AppPaths.ProfileName}"));
+                    string.Empty);
             }
 
             int hours = S.CellRecycleHours;
@@ -1276,7 +1312,7 @@ public sealed class MainForm : Form
         {
             var result = await _updates.CheckAsync().ConfigureAwait(true);
             if (_closing) return;
-            if (result.Status is UpdateStatus.UpToDate or UpdateStatus.Available) _store.SaveDeferred();
+            if (result.Status is UpdateStatus.UpToDate or UpdateStatus.Available) _store.SaveSettings();
             if (result.HasUpdate) ShowBanner($"{result.Message} 우클릭 메뉴 › 버전 및 업데이트");
         }
         catch
@@ -1289,7 +1325,7 @@ public sealed class MainForm : Form
     {
         using var dialog = new UpdateForm(S, _updates);
         dialog.ShowDialog(this);
-        if (dialog.SettingsChanged) _store.SaveDeferred();
+        if (dialog.SettingsChanged) _store.SaveSettings();
     }
 
     protected override void Dispose(bool disposing)
