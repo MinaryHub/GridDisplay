@@ -148,7 +148,7 @@ public class AppState
     /// </summary>
     public int SettingsVersion { get; set; }
 
-    private const int CurrentSettingsVersion = 2;
+    private const int CurrentSettingsVersion = 3;
 
     /// <summary>
     /// Set to open when no set is named on the command line. Only meaningful for a single copy;
@@ -180,11 +180,15 @@ public class AppState
     public int CellRecycleHours { get; set; } = 6;
 
     /// <summary>
-    /// Ceiling on the JavaScript heap of each page, in MB; 0 removes it. Without a ceiling a
-    /// dashboard that appends to a chart all night simply keeps growing — there is nothing to
-    /// make it collect. With one it collects instead, inside the budget.
+    /// Ceiling on the JavaScript heap of each page, in MB; 0 removes it, and 0 is the default.
+    ///
+    /// It was tried at 256 and had to be withdrawn: pages whose *live* data grows past the
+    /// ceiling do not collect their way back under it — V8 runs out and Windows kills the render
+    /// process, which shows up as a dead cell. A ceiling only helps a page that accumulates
+    /// garbage, and these accumulate data they still hold. Left here because it is the right
+    /// tool for a page that does churn, but it has to be chosen deliberately, per site.
     /// </summary>
-    public int BrowserHeapLimitMB { get; set; } = 256;
+    public int BrowserHeapLimitMB { get; set; }
 
     /// <summary>
     /// Run the browser lean: Chromium's low-memory heuristics plus a standing request to trim.
@@ -223,6 +227,12 @@ public class AppState
 
     public void Normalize()
     {
+        if (SettingsVersion < 3 && BrowserHeapLimitMB == 256)
+        {
+            // 1.0.2 shipped this on by default and it killed render processes on heavy pages.
+            BrowserHeapLimitMB = 0;
+        }
+
         if (SettingsVersion < 2 && CellRecycleHours == 24)
         {
             // 24 hours was the old default and it never fired on a wall that froze inside 13.

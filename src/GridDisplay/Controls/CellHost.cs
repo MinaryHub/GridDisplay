@@ -53,6 +53,16 @@ public sealed class CellHost : Panel
     private int _index;
     private bool _keepAliveActive = true;
 
+    /// <summary>
+    /// Recovery state for a dead render process. A wall runs for weeks, so a renderer will die
+    /// eventually — out of memory, a driver reset, a page that faults. Backing off matters as
+    /// much as retrying: a page that dies on load would otherwise reload forever, and a hundred
+    /// crash-reload cycles a minute is worse than a cell that sits there saying what happened.
+    /// </summary>
+    private readonly System.Windows.Forms.Timer _recoverTimer = new();
+    private int _recoverAttempts;
+    private DateTime _lastRecoverUtc = DateTime.MinValue;
+
     public CellHost(int index, CellConfig config)
     {
         _index = index;
@@ -74,6 +84,22 @@ public sealed class CellHost : Panel
         Controls.Add(_placeholder);
 
         _keepAlive.Tick += (_, _) => PulseKeepAlive();
+
+        _recoverTimer.Tick += (_, _) =>
+        {
+            _recoverTimer.Stop();
+            if (_web is null || !_webReady) return;
+            try
+            {
+                StatusText = string.Empty;
+                _web.CoreWebView2.Reload();
+            }
+            catch
+            {
+                StatusText = "화면을 다시 불러오지 못했습니다.";
+                _placeholder.BringToFront();
+            }
+        };
     }
 
     /// <summary>
@@ -117,6 +143,11 @@ public sealed class CellHost : Panel
     {
         Config = config;
         Release();
+
+        // Restarting a cell by hand is the operator saying "try again"; the crash count from the
+        // previous content should not count against the new one.
+        _recoverTimer.Stop();
+        _recoverAttempts = 0;
 
         _cts = new CancellationTokenSource();
         var ct = _cts.Token;
@@ -216,11 +247,7 @@ public sealed class CellHost : Panel
             StateChanged?.Invoke(this);
         };
 
-        core.ProcessFailed += (_, e) =>
-        {
-            StatusText = $"브라우저 프로세스 오류: {e.ProcessFailedKind}";
-            _placeholder.BringToFront();
-        };
+        core.ProcessFailed += (_, e) => OnProcessFailed(e.ProcessFailedKind);
 
         _webReady = true;
         _appliedZoom = 0;
@@ -354,6 +381,48 @@ public sealed class CellHost : Panel
         catch { }
     }
 
+    /// <summary>
+    /// Bring the cell back after its render process died or stopped answering.
+    ///
+    /// Only the render process is recovered here. When the *browser* process goes the WebView2
+    /// object is gone with it and reloading cannot help — that needs the cell rebuilt, which is
+    /// the caller's business, so it is reported and left alone.
+    /// </summary>
+    private void OnProcessFailed(CoreWebView2ProcessFailedKind kind)
+    {
+        bool renderer = kind is CoreWebView2ProcessFailedKind.RenderProcessExited
+                             or CoreWebView2ProcessFailedKind.RenderProcessUnresponsive;
+
+        if (!renderer)
+        {
+            StatusText = $"브라우저 프로세스 오류: {kind}";
+            _placeholder.BringToFront();
+            return;
+        }
+
+        // A crash that arrives long after the last one is a fresh incident, not a loop.
+        if (DateTime.UtcNow - _lastRecoverUtc > TimeSpan.FromMinutes(10)) _recoverAttempts = 0;
+        _lastRecoverUtc = DateTime.UtcNow;
+        _recoverAttempts++;
+
+        const int maxAttempts = 5;
+        if (_recoverAttempts > maxAttempts)
+        {
+            StatusText = $"화면을 되살리지 못했습니다 ({kind}). 셀 다시 시작을 눌러 주세요.";
+            _placeholder.BringToFront();
+            return;
+        }
+
+        // 5s, 10s, 20s, 40s, 80s — long enough that a page failing on load cannot spin.
+        int delay = 5000 * (int)Math.Pow(2, _recoverAttempts - 1);
+        StatusText = $"화면이 종료되어 {delay / 1000}초 뒤 다시 불러옵니다… ({_recoverAttempts}/{maxAttempts})";
+        _placeholder.BringToFront();
+
+        _recoverTimer.Stop();
+        _recoverTimer.Interval = delay;
+        _recoverTimer.Start();
+    }
+
     public void Reload()
     {
         if (_web is not null && _webReady)
@@ -428,6 +497,7 @@ public sealed class CellHost : Panel
         {
             Release();
             _keepAlive.Dispose();
+            _recoverTimer.Dispose();
         }
         base.Dispose(disposing);
     }
