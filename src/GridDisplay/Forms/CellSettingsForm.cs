@@ -16,6 +16,11 @@ public sealed class CellSettingsForm : Form
     private readonly NumericUpDown _zoom = new() { DecimalPlaces = 2, Minimum = 0.25M, Maximum = 4.0M, Increment = 0.05M, Value = 1.0M };
     private readonly CheckBox _preventLogout = new() { Text = "로그아웃 방지 (주기적으로 활동 신호 전송)", AutoSize = true };
     private readonly NumericUpDown _keepAliveSeconds = new() { Minimum = 10, Maximum = 3600, Increment = 10, Value = 60 };
+    private readonly NumericUpDown _refreshMinutes = new() { Minimum = 0, Maximum = 1440, Increment = 5, Value = 0 };
+    private readonly CheckBox _rememberLast = new() { Text = "마지막으로 열었던 주소로 시작", AutoSize = true, Checked = true };
+    private readonly Label _lastUrl = new() { AutoSize = false, ForeColor = SystemColors.GrayText, AutoEllipsis = true };
+    private readonly Button _resetUrl = new() { Text = "기본 주소로" };
+    private string _rememberedUrl = string.Empty;
 
     private readonly TextBox _exe = new();
     private readonly TextBox _args = new();
@@ -39,7 +44,7 @@ public sealed class CellSettingsForm : Form
         Font = new Font("Segoe UI", 9f);
         // Every coordinate below is authored at 96 DPI and scaled: the app runs PerMonitorV2, so
         // the font grows with the monitor's scaling and raw pixel bounds would clip the captions.
-        ClientSize = new Size(S(560), S(520));
+        ClientSize = new Size(S(560), S(569));
 
         int y = S(12);
 
@@ -63,34 +68,56 @@ public sealed class CellSettingsForm : Form
         y += S(34);
 
         // --- browser ---
-        _browserBox.Bounds = new Rectangle(S(12), y, S(536), S(212));
+        _browserBox.Bounds = new Rectangle(S(12), y, S(536), S(292));
         _browserBox.Controls.Add(new Label { Text = "주소", Bounds = new Rectangle(S(16), S(27), S(80), S(20)) });
         _url.Bounds = new Rectangle(S(100), S(24), S(420), S(23));
         _browserBox.Controls.Add(_url);
-        _browserBox.Controls.Add(new Label { Text = "프로필", Bounds = new Rectangle(S(16), S(60), S(80), S(20)) });
-        _profile.Bounds = new Rectangle(S(100), S(57), S(180), S(23));
+        _rememberLast.Location = new Point(S(100), S(53));
+        _browserBox.Controls.Add(_rememberLast);
+        _lastUrl.Bounds = new Rectangle(S(100), S(76), S(330), S(18));
+        _browserBox.Controls.Add(_lastUrl);
+        _resetUrl.Bounds = new Rectangle(S(436), S(72), S(84), S(25));
+        _resetUrl.Click += (_, _) =>
+        {
+            // Forget where it wandered to; the next start goes back to the address above.
+            _rememberedUrl = string.Empty;
+            ShowRememberedUrl();
+        };
+        _browserBox.Controls.Add(_resetUrl);
+
+        _browserBox.Controls.Add(new Label { Text = "프로필", Bounds = new Rectangle(S(16), S(109), S(80), S(20)) });
+        _profile.Bounds = new Rectangle(S(100), S(106), S(180), S(23));
         _browserBox.Controls.Add(_profile);
-        _browserBox.Controls.Add(new Label { Text = "(비우면 공용 세션)", Bounds = new Rectangle(S(288), S(60), S(140), S(20)), ForeColor = SystemColors.GrayText });
-        _fitToCell.Location = new Point(S(100), S(90));
+        _browserBox.Controls.Add(new Label { Text = "(비우면 공용 세션)", Bounds = new Rectangle(S(288), S(109), S(140), S(20)), ForeColor = SystemColors.GrayText });
+        _fitToCell.Location = new Point(S(100), S(139));
         _browserBox.Controls.Add(_fitToCell);
-        _browserBox.Controls.Add(new Label { Text = "확대 배율", Bounds = new Rectangle(S(16), S(121), S(80), S(20)) });
-        _zoom.Bounds = new Rectangle(S(100), S(118), S(80), S(23));
+        _browserBox.Controls.Add(new Label { Text = "확대 배율", Bounds = new Rectangle(S(16), S(170), S(80), S(20)) });
+        _zoom.Bounds = new Rectangle(S(100), S(167), S(80), S(23));
         _browserBox.Controls.Add(_zoom);
         _browserBox.Controls.Add(new Label
         {
             Text = "(자동 배율을 끈 경우에만 사용)",
-            Bounds = new Rectangle(S(188), S(121), S(210), S(20)),
+            Bounds = new Rectangle(S(188), S(170), S(210), S(20)),
             ForeColor = SystemColors.GrayText,
         });
-        _preventLogout.Location = new Point(S(100), S(150));
+        _preventLogout.Location = new Point(S(100), S(199));
         _browserBox.Controls.Add(_preventLogout);
-        _browserBox.Controls.Add(new Label { Text = "확인 주기", Bounds = new Rectangle(S(16), S(181), S(80), S(20)) });
-        _keepAliveSeconds.Bounds = new Rectangle(S(100), S(178), S(74), S(23));
+        _browserBox.Controls.Add(new Label { Text = "확인 주기", Bounds = new Rectangle(S(16), S(230), S(80), S(20)) });
+        _keepAliveSeconds.Bounds = new Rectangle(S(100), S(227), S(74), S(23));
         _browserBox.Controls.Add(_keepAliveSeconds);
         _browserBox.Controls.Add(new Label
         {
             Text = "초 · 보기 모드에서만 동작",
-            Bounds = new Rectangle(S(182), S(181), S(200), S(20)),
+            Bounds = new Rectangle(S(182), S(230), S(200), S(20)),
+            ForeColor = SystemColors.GrayText,
+        });
+        _browserBox.Controls.Add(new Label { Text = "새로 고침", Bounds = new Rectangle(S(16), S(261), S(80), S(20)) });
+        _refreshMinutes.Bounds = new Rectangle(S(100), S(258), S(74), S(23));
+        _browserBox.Controls.Add(_refreshMinutes);
+        _browserBox.Controls.Add(new Label
+        {
+            Text = "분마다 · 0이면 전체 설정을 따름",
+            Bounds = new Rectangle(S(182), S(261), S(240), S(20)),
             ForeColor = SystemColors.GrayText,
         });
         Controls.Add(_browserBox);
@@ -149,6 +176,21 @@ public sealed class CellSettingsForm : Form
     public CellConfig Result { get; private set; }
 
     /// <summary>Scale a coordinate authored at 96 DPI to this monitor.</summary>
+    /// <summary>
+    /// Show where the cell has drifted to, and offer to forget it. Without this the address box
+    /// says one thing and the screen shows another, with no hint that the two differ.
+    /// </summary>
+    private void ShowRememberedUrl()
+    {
+        bool drifted = !string.IsNullOrWhiteSpace(_rememberedUrl)
+            && !string.Equals(_rememberedUrl, _url.Text?.Trim(), StringComparison.OrdinalIgnoreCase);
+
+        _lastUrl.Text = drifted ? $"현재 열려 있는 주소: {_rememberedUrl}" : string.Empty;
+        _lastUrl.Visible = drifted;
+        _resetUrl.Visible = drifted;
+        _resetUrl.Enabled = drifted;
+    }
+
     private int S(int logical) => (int)Math.Round(logical * DeviceDpi / 96.0);
 
     private void LoadFrom(CellConfig c)
@@ -160,12 +202,16 @@ public sealed class CellSettingsForm : Form
         _rbBrowser.Checked = c.Kind != CellKind.Program;
         _title.Text = c.Title;
         _url.Text = c.Url;
+        _rememberLast.Checked = c.RememberLastUrl;
+        _rememberedUrl = c.LastUrl ?? string.Empty;
+        ShowRememberedUrl();
         _profile.Text = c.ProfileName;
         _fitToCell.Checked = c.FitToCell;
         _zoom.Value = (decimal)Math.Clamp(c.ZoomFactor <= 0 ? 1.0 : c.ZoomFactor, 0.25, 4.0);
         _zoom.Enabled = !c.FitToCell;
         _preventLogout.Checked = c.PreventLogout;
         _keepAliveSeconds.Value = Math.Clamp(c.KeepAliveSeconds <= 0 ? 60 : c.KeepAliveSeconds, 10, 3600);
+        _refreshMinutes.Value = Math.Clamp(c.RefreshMinutes, 0, 1440);
         _keepAliveSeconds.Enabled = c.PreventLogout;
         _exe.Text = c.ExecutablePath;
         _args.Text = c.Arguments;
@@ -224,6 +270,9 @@ public sealed class CellSettingsForm : Form
             ZoomFactor = (double)_zoom.Value,
             PreventLogout = _preventLogout.Checked,
             KeepAliveSeconds = (int)_keepAliveSeconds.Value,
+            RememberLastUrl = _rememberLast.Checked,
+            LastUrl = _rememberedUrl,
+            RefreshMinutes = (int)_refreshMinutes.Value,
             ExecutablePath = _exe.Text.Trim(),
             Arguments = _args.Text.Trim(),
             WorkingDirectory = _workDir.Text.Trim(),

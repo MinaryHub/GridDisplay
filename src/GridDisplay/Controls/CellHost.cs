@@ -59,6 +59,15 @@ public sealed class CellHost : Panel
     /// much as retrying: a page that dies on load would otherwise reload forever, and a hundred
     /// crash-reload cycles a minute is worse than a cell that sits there saying what happened.
     /// </summary>
+    /// <summary>
+    /// This cell's own refresh clock, when it has one. Asked <see cref="RefreshAllowed"/> before
+    /// it acts: reloading the cell somebody is reading, or typing into, would be rude.
+    /// </summary>
+    private readonly System.Windows.Forms.Timer _refreshTimer = new();
+
+    /// <summary>Set by the wall. Null means "always fine".</summary>
+    public Func<bool>? RefreshAllowed { get; set; }
+
     private readonly System.Windows.Forms.Timer _recoverTimer = new();
     private int _recoverAttempts;
     private DateTime _lastRecoverUtc = DateTime.MinValue;
@@ -85,6 +94,15 @@ public sealed class CellHost : Panel
 
         _keepAlive.Tick += (_, _) => PulseKeepAlive();
 
+        _refreshTimer.Tick += (_, _) =>
+        {
+            // Not now: leave the timer running and take the next slot instead of skipping a
+            // whole period, so a cell watched for an hour still refreshes when it is let go.
+            if (RefreshAllowed is not null && !RefreshAllowed()) return;
+            Services.HealthMonitor.Event($"셀 {Index + 1} 정기 새로 고침 · {Describe()}");
+            Reload();
+        };
+
         _recoverTimer.Tick += (_, _) =>
         {
             _recoverTimer.Stop();
@@ -93,6 +111,7 @@ public sealed class CellHost : Panel
             {
                 StatusText = string.Empty;
                 _web.CoreWebView2.Reload();
+                Services.HealthMonitor.Event($"셀 {Index + 1} 다시 불러옴 ({_recoverAttempts}번째)");
             }
             catch
             {
@@ -148,6 +167,7 @@ public sealed class CellHost : Panel
         // previous content should not count against the new one.
         _recoverTimer.Stop();
         _recoverAttempts = 0;
+        _refreshTimer.Stop();
 
         _cts = new CancellationTokenSource();
         var ct = _cts.Token;
@@ -202,14 +222,12 @@ public sealed class CellHost : Panel
         {
             await view.EnsureCoreWebView2Async().ConfigureAwait(true);
 
-            // A standing "keep this lean" request. Unlike the switches above this is per-cell and
-            // can be set at any time, so it applies even to cells that joined an already-running
-            // browser — which, after the first one, is all of them.
-            if (TrimBrowserMemory)
-            {
-                try { view.CoreWebView2.MemoryUsageTargetLevel = CoreWebView2MemoryUsageTargetLevel.Low; }
-                catch { /* older runtime: the switches above still apply */ }
-            }
+            // Deliberately NOT set to Low here. This asks the browser to release what a WebView
+            // is holding, which is right for one nobody is looking at and wrong for one that is
+            // on screen: a map streaming tiles has them dropped as fast as they arrive, and the
+            // page never finishes loading. It is applied from SetSuspended instead, where the
+            // cell really is hidden.
+            ApplyMemoryTarget(suspended: false);
         }
         catch (Exception ex)
         {
@@ -236,8 +254,9 @@ public sealed class CellHost : Panel
         {
             var source = core.Source;
             if (string.IsNullOrWhiteSpace(source) || source == "about:blank") return;
-            if (Config.Url == source) return;
-            Config.Url = source;
+            // Records where the cell went; never touches the configured address.
+            if (Config.LastUrl == source) return;
+            Config.LastUrl = source;
             StateChanged?.Invoke(this);
         };
 
@@ -249,12 +268,14 @@ public sealed class CellHost : Panel
 
         core.ProcessFailed += (_, e) => OnProcessFailed(e.ProcessFailedKind);
 
+        SyncRefreshTimer();
+
         _webReady = true;
         _appliedZoom = 0;
         ApplyZoom();
         SyncKeepAlive();
 
-        Navigate(config.Url);
+        Navigate(config.StartUrl);
         StatusText = string.Empty;
     }
 
@@ -393,6 +414,11 @@ public sealed class CellHost : Panel
         bool renderer = kind is CoreWebView2ProcessFailedKind.RenderProcessExited
                              or CoreWebView2ProcessFailedKind.RenderProcessUnresponsive;
 
+        // Logged before anything else: a cell that recovers leaves no trace on screen, so
+        // without this line "it died twice last night" is unanswerable.
+        Services.HealthMonitor.Event(
+            $"셀 {Index + 1} 프로세스 종료 ({kind}) · {Describe()}");
+
         if (!renderer)
         {
             StatusText = $"브라우저 프로세스 오류: {kind}";
@@ -423,6 +449,25 @@ public sealed class CellHost : Panel
         _recoverTimer.Start();
     }
 
+    /// <summary>Start or stop this cell's own refresh clock to match its configuration.</summary>
+    private void SyncRefreshTimer()
+    {
+        _refreshTimer.Stop();
+        int minutes = Config.Kind == CellKind.Browser ? Config.RefreshMinutes : 0;
+        if (minutes <= 0) return;
+        _refreshTimer.Interval = (int)TimeSpan.FromMinutes(minutes).TotalMilliseconds;
+        _refreshTimer.Start();
+    }
+
+    /// <summary>What this cell is showing, short enough for a log line.</summary>
+    private string Describe()
+    {
+        var url = Config.Url ?? string.Empty;
+        if (url.Length > 120) url = url[..120] + "…";
+        var title = string.IsNullOrWhiteSpace(Config.Title) ? string.Empty : $"'{Config.Title}' ";
+        return title + url;
+    }
+
     public void Reload()
     {
         if (_web is not null && _webReady)
@@ -446,6 +491,25 @@ public sealed class CellHost : Panel
     /// Free the browser's memory while the cell is off-screen. Optional because resuming costs
     /// a visible beat, which is the wrong trade for a wall that is switched between constantly.
     /// </summary>
+    /// <summary>
+    /// Tell the browser how hard to trim this cell. Low belongs to a hidden cell only — see the
+    /// note where the WebView is created.
+    /// </summary>
+    private void ApplyMemoryTarget(bool suspended)
+    {
+        if (_web is null) return;
+        try
+        {
+            _web.CoreWebView2.MemoryUsageTargetLevel = TrimBrowserMemory && suspended
+                ? CoreWebView2MemoryUsageTargetLevel.Low
+                : CoreWebView2MemoryUsageTargetLevel.Normal;
+        }
+        catch
+        {
+            // Older runtime: the browser-wide switches still apply.
+        }
+    }
+
     public void SetSuspended(bool suspend)
     {
         // A cell asked to stay signed in must stay running — suspending it is exactly the idleness
@@ -457,6 +521,7 @@ public sealed class CellHost : Panel
         {
             if (suspend) _ = _web.CoreWebView2.TrySuspendAsync();
             else _web.CoreWebView2.Resume();
+            ApplyMemoryTarget(suspend);
         }
         catch { }
     }
@@ -498,6 +563,7 @@ public sealed class CellHost : Panel
             Release();
             _keepAlive.Dispose();
             _recoverTimer.Dispose();
+            _refreshTimer.Dispose();
         }
         base.Dispose(disposing);
     }

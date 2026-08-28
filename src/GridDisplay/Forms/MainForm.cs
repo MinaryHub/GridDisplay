@@ -199,6 +199,8 @@ public sealed class MainForm : Form
         for (int i = 0; i < preset.CellCount; i++)
         {
             var host = new CellHost(i, preset.Cells[i]);
+            // Never reload the cell being read or typed into; it takes the next slot instead.
+            host.RefreshAllowed = () => !_interactive && _zoomed != host.Index;
             host.StateChanged += OnCellStateChanged;
             _cells.Add(host);
             Controls.Add(host);
@@ -1274,6 +1276,8 @@ public sealed class MainForm : Form
         {
             if (_closing || _interactive || _zoomed >= 0) return;
             if (i >= _preset.Cells.Count || _preset.Cells[i].Kind != CellKind.Browser) continue;
+            // A cell with its own interval refreshes on that; leave it alone.
+            if (_preset.Cells[i].RefreshMinutes > 0) continue;
 
             try { _cells[i].Reload(); }
             catch { /* a cell that cannot reload reports it itself */ }

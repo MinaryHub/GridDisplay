@@ -16,8 +16,30 @@ public sealed class CellConfig
     public string Title { get; set; } = string.Empty;
 
     // --- Browser ---
-    /// <summary>Last known address. Rewritten whenever the cell navigates, so a restart resumes where the user left off.</summary>
+    /// <summary>
+    /// The address this cell is configured to show. Set by the user and never written by the
+    /// running page — a map that puts its coordinates in the address bar, or a site that bounces
+    /// through a login, would otherwise erase the address that was typed here and leave no way
+    /// back to it. Where the cell has wandered to is kept in <see cref="LastUrl"/>.
+    /// </summary>
     public string Url { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Where the cell actually was when it was last running, recorded as it navigates. Used to
+    /// resume rather than to define — see <see cref="RememberLastUrl"/>.
+    /// </summary>
+    public string LastUrl { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Reopen at <see cref="LastUrl"/> instead of <see cref="Url"/>. On by default, which is the
+    /// behaviour a wall wants: someone browsed somewhere useful and a restart should not undo it.
+    /// Turn it off for a cell that must always come back to the same screen.
+    /// </summary>
+    public bool RememberLastUrl { get; set; } = true;
+
+    /// <summary>Where this cell should navigate when it starts.</summary>
+    public string StartUrl =>
+        RememberLastUrl && !string.IsNullOrWhiteSpace(LastUrl) ? LastUrl : Url;
     /// <summary>WebView2 profile. Distinct names give cells independent cookies/logins.</summary>
     public string ProfileName { get; set; } = string.Empty;
     /// <summary>
@@ -36,6 +58,13 @@ public sealed class CellConfig
     public bool PreventLogout { get; set; }
     /// <summary>Seconds between keep-alive pulses. Clamped to 10..3600 by <see cref="GridPreset.Normalize"/>.</summary>
     public int KeepAliveSeconds { get; set; } = 60;
+
+    /// <summary>
+    /// Reload this cell every N minutes; 0 leaves it to the wall-wide schedule. Here because one
+    /// heavy page should not set the pace for the rest — a map that has to be refreshed every
+    /// quarter hour is no reason to disturb twenty cells that are perfectly happy for a day.
+    /// </summary>
+    public int RefreshMinutes { get; set; }
 
     // --- Program ---
     public string ExecutablePath { get; set; } = string.Empty;
@@ -110,7 +139,11 @@ public sealed class GridPreset
         while (Cells.Count < CellCount) Cells.Add(new CellConfig());
         if (Cells.Count > CellCount) Cells.RemoveRange(CellCount, Cells.Count - CellCount);
         foreach (var c in Cells)
+        {
             c.KeepAliveSeconds = c.KeepAliveSeconds <= 0 ? 60 : Math.Clamp(c.KeepAliveSeconds, 10, 3600);
+            // 0 is "follow the wall"; a minute is the shortest that is not simply thrashing.
+            if (c.RefreshMinutes != 0) c.RefreshMinutes = Math.Clamp(c.RefreshMinutes, 1, 24 * 60);
+        }
     }
 
     public GridPreset Duplicate(string name)
@@ -148,7 +181,7 @@ public class AppState
     /// </summary>
     public int SettingsVersion { get; set; }
 
-    private const int CurrentSettingsVersion = 3;
+    private const int CurrentSettingsVersion = 4;
 
     /// <summary>
     /// Set to open when no set is named on the command line. Only meaningful for a single copy;
@@ -191,11 +224,14 @@ public class AppState
     public int BrowserHeapLimitMB { get; set; }
 
     /// <summary>
-    /// Run the browser lean: Chromium's low-memory heuristics plus a standing request to trim.
-    /// A wall is the case these were written for — the pages are watched, never touched, so
-    /// trading a little responsiveness for memory is free.
+    /// Run the browser under Chromium's low-memory heuristics, and trim hidden cells harder.
+    ///
+    /// Off by default, having been on and withdrawn: low-end-device mode shrinks caches and
+    /// disables code caching, which a page that streams a lot — a live map above all — feels as
+    /// loading that keeps stopping. Worth turning on where memory is tighter than the pages are
+    /// demanding, which is the opposite of the case it was added for.
     /// </summary>
-    public bool BrowserMemorySaver { get; set; } = true;
+    public bool BrowserMemorySaver { get; set; }
 
     /// <summary>
     /// Where to look for a new version: an .appinstaller file or a small update.json. Empty means
@@ -227,6 +263,12 @@ public class AppState
 
     public void Normalize()
     {
+        if (SettingsVersion < 4 && BrowserMemorySaver)
+        {
+            // 1.0.2 through 1.0.5 shipped this on; it interrupts loading on streaming pages.
+            BrowserMemorySaver = false;
+        }
+
         if (SettingsVersion < 3 && BrowserHeapLimitMB == 256)
         {
             // 1.0.2 shipped this on by default and it killed render processes on heavy pages.

@@ -34,7 +34,7 @@
     Keep it three-part: MSIX wants four parts and the packaging script appends the ".0".
   -->
   <PropertyGroup>
-    <Version>1.0.3</Version>
+    <Version>1.0.7</Version>
     <AssemblyVersion>$(Version).0</AssemblyVersion>
     <FileVersion>$(Version).0</FileVersion>
     <Company>SMIC</Company>

@@ -84,6 +84,13 @@ public static class HealthMonitor
         }
     }
 
+    /// <summary>
+    /// Record something that happened, as opposed to the periodic snapshot. Goes in the same file
+    /// on purpose: when a cell dies, the next question is always what memory looked like around
+    /// then, and interleaving the two makes that a matter of reading down the page.
+    /// </summary>
+    public static void Event(string message) => Write(message);
+
     private static void Write(string message)
     {
         try

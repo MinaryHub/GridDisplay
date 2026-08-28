@@ -1,7 +1,7 @@
 ﻿{
-    "version":  "1.0.3",
-    "url":  "https://github.com/knoxxr/GridDisplay/releases/download/v1.0.3/GridDisplay-1.0.3.zip",
-    "sha256":  "2A18B29E5E64FD47C51D1F8A1F25D42F1F944E7128F83FA2CE4E51EE6BB63545",
-    "notes":  "렌더러 자동 복구, 힙 제한 기본 해제",
-    "published":  "2026-08-27"
+    "version":  "1.0.7",
+    "url":  "https://github.com/knoxxr/GridDisplay/releases/download/v1.0.7/GridDisplay-1.0.7.zip",
+    "sha256":  "C90953A51DFCE888E3962DDE2A94E2529B893B6BAA643322010CBA47522996C2",
+    "notes":  "설정한 주소가 페이지 이동에 덮어써지지 않도록 분리",
+    "published":  "2026-08-28"
 }

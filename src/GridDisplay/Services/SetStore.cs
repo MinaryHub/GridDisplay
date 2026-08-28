@@ -71,12 +71,14 @@ public sealed class SetStore : IDisposable
     {
         Directory.CreateDirectory(SetsDirectory);
         MigrateLegacyStateIfPresent();
-        LoadSettings();
 
-        // Write it out even when nothing changed. These are the knobs an operator is told to
-        // edit, and a file that only appears after the app happens to save something is a file
-        // they cannot find.
-        if (!File.Exists(SettingsPath)) SaveSettings();
+        // Write the file back whenever loading changed it — because it was missing, or because
+        // Normalize corrected a setting on the way in. Leaving a migrated value only in memory
+        // means the file still shows the old one, and the next person to read it concludes the
+        // migration did not happen.
+        bool rewrite = !File.Exists(SettingsPath);
+        rewrite |= LoadSettings();
+        if (rewrite) SaveSettings();
 
         LoadSets();
 
@@ -87,7 +89,8 @@ public sealed class SetStore : IDisposable
         }
     }
 
-    private void LoadSettings()
+    /// <summary>Returns true when Normalize corrected something, so the caller can write it back.</summary>
+    private bool LoadSettings()
     {
         try
         {
@@ -99,7 +102,10 @@ public sealed class SetStore : IDisposable
             // A corrupt preferences file must not stop the wall coming up; defaults are fine.
             Settings = new AppState();
         }
+
+        int before = Settings.SettingsVersion;
         Settings.Normalize();
+        return Settings.SettingsVersion != before;
     }
 
     private void LoadSets()
