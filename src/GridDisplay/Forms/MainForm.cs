@@ -460,6 +460,14 @@ public sealed class MainForm : Form
         }
 
         if (index < 0) return false;
+
+        // A release we never saw the press for is not ours to eat. Dragging the window by its
+        // title bar is exactly that: the press lands on the caption, the cursor then travels
+        // over the cells, and swallowing the release leaves Windows in its move loop with the
+        // window stuck to the pointer.
+        if (pressed < 0) return false;
+
+        // Pressed on one cell and released on another: consume it, but do nothing.
         if (pressed != index) return true;
 
         // The hook must return promptly; do the real work back on the message loop.
