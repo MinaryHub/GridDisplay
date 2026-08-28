@@ -41,6 +41,12 @@ public sealed class MainForm : Form
     private DateTime _lastHealthUtc = DateTime.UtcNow;
     private DateTime _lastRecycleUtc = DateTime.UtcNow;
     private readonly ContextMenuStrip _menu = new();
+
+    /// <summary>
+    /// Kept as a field because its caption and enabled state depend on the cell the menu was
+    /// opened over, which is only known when it opens.
+    /// </summary>
+    private ToolStripMenuItem _adoptUrlItem = null!;
     private readonly Button _exitButton;
 
     private GridPreset _preset = null!;
@@ -980,6 +986,8 @@ public sealed class MainForm : Form
     private void BuildMenu()
     {
         _menu.Items.Add("셀 설정…", null, (_, _) => EditCell(_menuCell));
+        _adoptUrlItem = new ToolStripMenuItem("현재 주소를 이 칸의 주소로", null, (_, _) => AdoptCurrentUrl(_menuCell));
+        _menu.Items.Add(_adoptUrlItem);
         _menu.Items.Add("새로 고침", null, (_, _) => CellAt(_menuCell)?.Reload());
         _menu.Items.Add("셀 다시 시작", null, (_, _) => RestartCell(_menuCell));
         _menu.Items.Add("셀 비우기", null, (_, _) => ClearCell(_menuCell));
@@ -1021,10 +1029,44 @@ public sealed class MainForm : Form
         _selected = index;
         InvalidateCellFrame(previous);
         InvalidateCellFrame(index);
+        UpdateAdoptUrlItem(index);
         _menu.Show(screen);
     }
 
     // ------------------------------------------------------------------ commands
+
+    /// <summary>
+    /// Offer to adopt the address only when there is something to adopt: a browser cell that has
+    /// wandered somewhere other than the address it was configured with. Showing the address in
+    /// the caption saves opening the settings window to see what would be saved.
+    /// </summary>
+    private void UpdateAdoptUrlItem(int index)
+    {
+        var cell = index >= 0 && index < _preset.Cells.Count ? _preset.Cells[index] : null;
+        bool drifted = cell is { Kind: CellKind.Browser }
+            && !string.IsNullOrWhiteSpace(cell.LastUrl)
+            && !string.Equals(cell.LastUrl, cell.Url, StringComparison.OrdinalIgnoreCase);
+
+        _adoptUrlItem.Available = drifted;
+        if (!drifted) return;
+
+        var shown = cell!.LastUrl.Length > 60 ? cell.LastUrl[..60] + "…" : cell.LastUrl;
+        _adoptUrlItem.Text = $"현재 주소를 이 칸의 주소로  ({shown})";
+    }
+
+    /// <summary>Make where the cell is now the address it is configured with.</summary>
+    private void AdoptCurrentUrl(int index)
+    {
+        if (index < 0 || index >= _preset.Cells.Count) return;
+        var cell = _preset.Cells[index];
+        if (cell.Kind != CellKind.Browser || string.IsNullOrWhiteSpace(cell.LastUrl)) return;
+
+        cell.Url = cell.LastUrl;
+        _store.SaveSet(_preset);
+        Invalidate();
+        UpdateTitle();
+        ShowBanner($"셀 {index + 1}의 주소를 현재 화면으로 바꿨습니다");
+    }
 
     private async void EditCell(int index)
     {
