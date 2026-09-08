@@ -17,10 +17,12 @@ public sealed class CellSettingsForm : Form
     private readonly CheckBox _preventLogout = new() { Text = "로그아웃 방지 (주기적으로 활동 신호 전송)", AutoSize = true };
     private readonly NumericUpDown _keepAliveSeconds = new() { Minimum = 10, Maximum = 3600, Increment = 10, Value = 60 };
     private readonly NumericUpDown _refreshMinutes = new() { Minimum = 0, Maximum = 1440, Increment = 5, Value = 0 };
-    private readonly CheckBox _rememberLast = new() { Text = "마지막으로 열었던 주소로 시작", AutoSize = true, Checked = true };
+    private readonly CheckBox _rememberLast = new() { Text = "마지막으로 열었던 주소로 시작 (끄면 항상 위 주소)", AutoSize = true };
     private readonly Label _lastUrl = new() { AutoSize = false, ForeColor = SystemColors.GrayText, AutoEllipsis = true };
     private readonly Button _resetUrl = new() { Text = "기본 주소로" };
     private string _rememberedUrl = string.Empty;
+    /// <summary>The address as it was when the dialog opened, to tell an edit from a re-save.</summary>
+    private readonly string _originalUrl;
 
     private readonly TextBox _exe = new();
     private readonly TextBox _args = new();
@@ -35,6 +37,7 @@ public sealed class CellSettingsForm : Form
     public CellSettingsForm(int cellIndex, CellConfig config)
     {
         Result = config.Clone();
+        _originalUrl = config.Url ?? string.Empty;
 
         Text = $"셀 {cellIndex + 1} 설정";
         StartPosition = FormStartPosition.CenterParent;
@@ -260,11 +263,18 @@ public sealed class CellSettingsForm : Form
             return;
         }
 
+        // Typing a new address is the clearest possible statement of where this cell belongs, so
+        // whatever it had drifted to is dropped — otherwise, with resume on, the new address
+        // would be saved and then ignored on the next start.
+        var url = kind == CellKind.Browser ? _url.Text.Trim() : string.Empty;
+        if (!string.Equals(url, _originalUrl.Trim(), StringComparison.Ordinal))
+            _rememberedUrl = string.Empty;
+
         Result = new CellConfig
         {
             Kind = kind,
             Title = _title.Text.Trim(),
-            Url = kind == CellKind.Browser ? _url.Text.Trim() : string.Empty,
+            Url = url,
             ProfileName = _profile.Text.Trim(),
             FitToCell = _fitToCell.Checked,
             ZoomFactor = (double)_zoom.Value,

@@ -119,7 +119,7 @@ public sealed class SetStore : IDisposable
             {
                 var set = JsonSerializer.Deserialize<GridPreset>(File.ReadAllText(path), JsonOptions);
                 if (set is null) continue;
-                set.Normalize();
+                bool migrated = set.Normalize();
                 if (string.IsNullOrWhiteSpace(set.Id)) set.Id = Guid.NewGuid().ToString("N");
 
                 // Two files claiming one id would make saves ambiguous; the later one is a copy.
@@ -127,6 +127,10 @@ public sealed class SetStore : IDisposable
 
                 _sets.Add(set);
                 _files[set.Id] = path;
+
+                // Same reason the settings file is rewritten after a migration: a corrected
+                // value that only lives in memory leaves the file still showing the old one.
+                if (migrated) WriteAtomic(path, JsonSerializer.Serialize(set, JsonOptions));
             }
             catch
             {

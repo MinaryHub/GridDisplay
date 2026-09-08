@@ -31,11 +31,12 @@ public sealed class CellConfig
     public string LastUrl { get; set; } = string.Empty;
 
     /// <summary>
-    /// Reopen at <see cref="LastUrl"/> instead of <see cref="Url"/>. On by default, which is the
-    /// behaviour a wall wants: someone browsed somewhere useful and a restart should not undo it.
-    /// Turn it off for a cell that must always come back to the same screen.
+    /// Reopen at <see cref="LastUrl"/> instead of <see cref="Url"/>. Off by default: a wall is
+    /// configured once and expected to come up showing exactly the screens it was configured
+    /// with, and a page that had bounced through a login or drifted to a sub-view made a restart
+    /// the one thing that could not put it back. Turn it on for a cell someone browses from.
     /// </summary>
-    public bool RememberLastUrl { get; set; } = true;
+    public bool RememberLastUrl { get; set; }
 
     /// <summary>Where this cell should navigate when it starts.</summary>
     public string StartUrl =>
@@ -101,6 +102,15 @@ public sealed class CellConfig
 /// <summary>A saved grid arrangement — the "set" the user can recall.</summary>
 public sealed class GridPreset
 {
+    /// <summary>
+    /// Bumped when a stored cell setting needs correcting on load. Starts at 0 so a file written
+    /// before this existed is recognised as old — the same reason
+    /// <see cref="AppState.SettingsVersion"/> does it this way.
+    /// </summary>
+    public int SchemaVersion { get; set; }
+
+    private const int CurrentSchemaVersion = 1;
+
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
     public string Name { get; set; } = "새 세트";
     public int Columns { get; set; } = 3;
@@ -131,8 +141,10 @@ public sealed class GridPreset
         Cells = next;
     }
 
-    public void Normalize()
+    /// <summary>Returns true when something was corrected, so the caller can write the file back.</summary>
+    public bool Normalize()
     {
+        int versionBefore = SchemaVersion;
         Columns = Math.Clamp(Columns, 1, 12);
         Rows = Math.Clamp(Rows, 1, 12);
         Cells ??= new List<CellConfig>();
@@ -143,7 +155,15 @@ public sealed class GridPreset
             c.KeepAliveSeconds = c.KeepAliveSeconds <= 0 ? 60 : Math.Clamp(c.KeepAliveSeconds, 10, 3600);
             // 0 is "follow the wall"; a minute is the shortest that is not simply thrashing.
             if (c.RefreshMinutes != 0) c.RefreshMinutes = Math.Clamp(c.RefreshMinutes, 1, 24 * 60);
+
+            // "Resume where it wandered to" used to be on for every cell, so a restart showed
+            // the last page instead of the configured address. Files written back then cannot be
+            // told apart from a deliberate choice, so the flag is cleared once, here.
+            if (SchemaVersion < 1) c.RememberLastUrl = false;
         }
+
+        SchemaVersion = Math.Max(SchemaVersion, CurrentSchemaVersion);
+        return SchemaVersion != versionBefore;
     }
 
     public GridPreset Duplicate(string name)
@@ -155,6 +175,8 @@ public sealed class GridPreset
             Columns = Columns,
             Rows = Rows,
             Cells = Cells.Select(c => c.Clone()).ToList(),
+            // Carried over, or Normalize would read the copy as an old file and clear the flags.
+            SchemaVersion = SchemaVersion,
         };
         return copy;
     }

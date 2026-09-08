@@ -1,7 +1,7 @@
 ﻿{
-    "version":  "1.0.9",
-    "url":  "https://github.com/knoxxr/GridDisplay/releases/download/v1.0.9/GridDisplay-1.0.9.zip",
-    "sha256":  "1754143E3BD9B5FC8D498D56E39CB8F19EF9FB5FDCB4A31A7442622CDC60D87E",
-    "notes":  "우클릭 메뉴에 \u0027현재 주소를 이 칸의 주소로\u0027 추가",
-    "published":  "2026-08-28"
+    "version":  "1.0.10",
+    "url":  "https://github.com/knoxxr/GridDisplay/releases/download/v1.0.10/GridDisplay-1.0.10.zip",
+    "sha256":  "151FB6BC6FCC03FE0342939A43F428360EB740CEDAC79A74FBAC593300B7C6D1",
+    "notes":  "재시작할 때 칸에 설정된 주소로 열리도록 수정",
+    "published":  "2026-09-08"
 }
