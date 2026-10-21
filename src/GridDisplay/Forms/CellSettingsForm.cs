@@ -17,12 +17,17 @@ public sealed class CellSettingsForm : Form
     private readonly CheckBox _preventLogout = new() { Text = "로그아웃 방지 (주기적으로 활동 신호 전송)", AutoSize = true };
     private readonly NumericUpDown _keepAliveSeconds = new() { Minimum = 10, Maximum = 3600, Increment = 10, Value = 60 };
     private readonly NumericUpDown _refreshMinutes = new() { Minimum = 0, Maximum = 1440, Increment = 5, Value = 0 };
+    private readonly CheckBox _keepSignedIn = new() { Text = "다시 켜도 로그인 유지 (같은 프로필 전체에 적용)", AutoSize = true };
+    private readonly CheckBox _returnAfterLogin = new() { Text = "로그인 화면을 거친 뒤 원래 화면으로 돌아가기", AutoSize = true, Checked = true };
     private readonly CheckBox _rememberLast = new() { Text = "마지막으로 열었던 주소로 시작 (끄면 항상 위 주소)", AutoSize = true };
     private readonly Label _lastUrl = new() { AutoSize = false, ForeColor = SystemColors.GrayText, AutoEllipsis = true };
     private readonly Button _resetUrl = new() { Text = "기본 주소로" };
     private string _rememberedUrl = string.Empty;
     /// <summary>The address as it was when the dialog opened, to tell an edit from a re-save.</summary>
     private readonly string _originalUrl;
+    private double _zoomScale;
+    private readonly Label _userZoom = new() { AutoSize = false, ForeColor = SystemColors.GrayText, TextAlign = ContentAlignment.MiddleRight };
+    private readonly Button _resetZoom = new() { Text = "원래대로" };
 
     private readonly TextBox _exe = new();
     private readonly TextBox _args = new();
@@ -38,6 +43,7 @@ public sealed class CellSettingsForm : Form
     {
         Result = config.Clone();
         _originalUrl = config.Url ?? string.Empty;
+        _zoomScale = config.ZoomScale;
 
         Text = $"셀 {cellIndex + 1} 설정";
         StartPosition = FormStartPosition.CenterParent;
@@ -47,7 +53,7 @@ public sealed class CellSettingsForm : Form
         Font = new Font("Segoe UI", 9f);
         // Every coordinate below is authored at 96 DPI and scaled: the app runs PerMonitorV2, so
         // the font grows with the monitor's scaling and raw pixel bounds would clip the captions.
-        ClientSize = new Size(S(560), S(569));
+        ClientSize = new Size(S(560), S(616));
 
         int y = S(12);
 
@@ -71,15 +77,19 @@ public sealed class CellSettingsForm : Form
         y += S(34);
 
         // --- browser ---
-        _browserBox.Bounds = new Rectangle(S(12), y, S(536), S(292));
-        _browserBox.Controls.Add(new Label { Text = "주소", Bounds = new Rectangle(S(16), S(27), S(80), S(20)) });
-        _url.Bounds = new Rectangle(S(100), S(24), S(420), S(23));
+        // Four sections in the order a cell is set up: where it points, how it looks, how it
+        // stays signed in, how often it reloads. Each starts with a heading and a rule.
+        _browserBox.Bounds = new Rectangle(S(12), y, S(536), S(446));
+
+        AddSection(_browserBox, "주소", S(20));
+        _browserBox.Controls.Add(new Label { Text = "주소", Bounds = new Rectangle(S(16), S(47), S(80), S(20)) });
+        _url.Bounds = new Rectangle(S(100), S(44), S(420), S(23));
         _browserBox.Controls.Add(_url);
-        _rememberLast.Location = new Point(S(100), S(53));
+        _rememberLast.Location = new Point(S(100), S(73));
         _browserBox.Controls.Add(_rememberLast);
-        _lastUrl.Bounds = new Rectangle(S(100), S(76), S(330), S(18));
+        _lastUrl.Bounds = new Rectangle(S(100), S(98), S(330), S(18));
         _browserBox.Controls.Add(_lastUrl);
-        _resetUrl.Bounds = new Rectangle(S(436), S(72), S(84), S(25));
+        _resetUrl.Bounds = new Rectangle(S(436), S(94), S(84), S(25));
         _resetUrl.Click += (_, _) =>
         {
             // Forget where it wandered to; the next start goes back to the address above.
@@ -88,39 +98,57 @@ public sealed class CellSettingsForm : Form
         };
         _browserBox.Controls.Add(_resetUrl);
 
-        _browserBox.Controls.Add(new Label { Text = "프로필", Bounds = new Rectangle(S(16), S(109), S(80), S(20)) });
-        _profile.Bounds = new Rectangle(S(100), S(106), S(180), S(23));
-        _browserBox.Controls.Add(_profile);
-        _browserBox.Controls.Add(new Label { Text = "(비우면 공용 세션)", Bounds = new Rectangle(S(288), S(109), S(140), S(20)), ForeColor = SystemColors.GrayText });
-        _fitToCell.Location = new Point(S(100), S(139));
+        AddSection(_browserBox, "화면", S(128));
+        _fitToCell.Location = new Point(S(100), S(150));
         _browserBox.Controls.Add(_fitToCell);
-        _browserBox.Controls.Add(new Label { Text = "확대 배율", Bounds = new Rectangle(S(16), S(170), S(80), S(20)) });
-        _zoom.Bounds = new Rectangle(S(100), S(167), S(80), S(23));
+        _userZoom.Bounds = new Rectangle(S(330), S(152), S(100), S(20));
+        _browserBox.Controls.Add(_userZoom);
+        _resetZoom.Bounds = new Rectangle(S(436), S(147), S(84), S(25));
+        _resetZoom.Click += (_, _) =>
+        {
+            _zoomScale = 1.0;
+            ShowUserZoom();
+        };
+        _browserBox.Controls.Add(_resetZoom);
+        _browserBox.Controls.Add(new Label { Text = "확대 배율", Bounds = new Rectangle(S(16), S(181), S(80), S(20)) });
+        _zoom.Bounds = new Rectangle(S(100), S(178), S(80), S(23));
         _browserBox.Controls.Add(_zoom);
         _browserBox.Controls.Add(new Label
         {
             Text = "(자동 배율을 끈 경우에만 사용)",
-            Bounds = new Rectangle(S(188), S(170), S(210), S(20)),
+            Bounds = new Rectangle(S(188), S(181), S(210), S(20)),
             ForeColor = SystemColors.GrayText,
         });
-        _preventLogout.Location = new Point(S(100), S(199));
+        _browserBox.Controls.Add(new Label { Text = "프로필", Bounds = new Rectangle(S(16), S(212), S(80), S(20)) });
+        _profile.Bounds = new Rectangle(S(100), S(209), S(180), S(23));
+        _browserBox.Controls.Add(_profile);
+        _browserBox.Controls.Add(new Label { Text = "비우면 공용 · 이름이 다르면 다른 계정", Bounds = new Rectangle(S(288), S(212), S(232), S(20)), ForeColor = SystemColors.GrayText });
+
+        AddSection(_browserBox, "로그인", S(244));
+        _keepSignedIn.Location = new Point(S(100), S(266));
+        _browserBox.Controls.Add(_keepSignedIn);
+        _returnAfterLogin.Location = new Point(S(100), S(290));
+        _browserBox.Controls.Add(_returnAfterLogin);
+        _preventLogout.Location = new Point(S(100), S(314));
         _browserBox.Controls.Add(_preventLogout);
-        _browserBox.Controls.Add(new Label { Text = "확인 주기", Bounds = new Rectangle(S(16), S(230), S(80), S(20)) });
-        _keepAliveSeconds.Bounds = new Rectangle(S(100), S(227), S(74), S(23));
+        _browserBox.Controls.Add(new Label { Text = "확인 주기", Bounds = new Rectangle(S(16), S(343), S(80), S(20)) });
+        _keepAliveSeconds.Bounds = new Rectangle(S(100), S(340), S(74), S(23));
         _browserBox.Controls.Add(_keepAliveSeconds);
         _browserBox.Controls.Add(new Label
         {
             Text = "초 · 보기 모드에서만 동작",
-            Bounds = new Rectangle(S(182), S(230), S(200), S(20)),
+            Bounds = new Rectangle(S(182), S(343), S(200), S(20)),
             ForeColor = SystemColors.GrayText,
         });
-        _browserBox.Controls.Add(new Label { Text = "새로 고침", Bounds = new Rectangle(S(16), S(261), S(80), S(20)) });
-        _refreshMinutes.Bounds = new Rectangle(S(100), S(258), S(74), S(23));
+
+        AddSection(_browserBox, "새로 고침", S(376));
+        _browserBox.Controls.Add(new Label { Text = "주기", Bounds = new Rectangle(S(16), S(405), S(80), S(20)) });
+        _refreshMinutes.Bounds = new Rectangle(S(100), S(402), S(74), S(23));
         _browserBox.Controls.Add(_refreshMinutes);
         _browserBox.Controls.Add(new Label
         {
             Text = "분마다 · 0이면 전체 설정을 따름",
-            Bounds = new Rectangle(S(182), S(261), S(240), S(20)),
+            Bounds = new Rectangle(S(182), S(405), S(240), S(20)),
             ForeColor = SystemColors.GrayText,
         });
         Controls.Add(_browserBox);
@@ -158,8 +186,8 @@ public sealed class CellSettingsForm : Form
         _programBox.Controls.Add(_closeOnRelease);
         Controls.Add(_programBox);
 
-        var ok = new Button { Text = "확인", DialogResult = DialogResult.OK, Bounds = new Rectangle(S(376), S(470), S(84), S(30)) };
-        var cancel = new Button { Text = "취소", DialogResult = DialogResult.Cancel, Bounds = new Rectangle(S(464), S(470), S(84), S(30)) };
+        var ok = new Button { Text = "확인", DialogResult = DialogResult.OK, Bounds = new Rectangle(S(376), S(574), S(84), S(30)) };
+        var cancel = new Button { Text = "취소", DialogResult = DialogResult.Cancel, Bounds = new Rectangle(S(464), S(574), S(84), S(30)) };
         Controls.Add(ok);
         Controls.Add(cancel);
         AcceptButton = ok;
@@ -168,7 +196,11 @@ public sealed class CellSettingsForm : Form
         _rbEmpty.CheckedChanged += (_, _) => SyncVisibility();
         _rbBrowser.CheckedChanged += (_, _) => SyncVisibility();
         _rbProgram.CheckedChanged += (_, _) => SyncVisibility();
-        _fitToCell.CheckedChanged += (_, _) => _zoom.Enabled = !_fitToCell.Checked;
+        _fitToCell.CheckedChanged += (_, _) =>
+        {
+            _zoom.Enabled = !_fitToCell.Checked;
+            ShowUserZoom();
+        };
         _preventLogout.CheckedChanged += (_, _) => _keepAliveSeconds.Enabled = _preventLogout.Checked;
 
         LoadFrom(config);
@@ -194,6 +226,31 @@ public sealed class CellSettingsForm : Form
         _resetUrl.Enabled = drifted;
     }
 
+    /// <summary>A bold section heading with a rule beside it, inside a group box.</summary>
+    private void AddSection(Control parent, string text, int top)
+    {
+        var heading = new Label { Text = text, AutoSize = true, Location = new Point(S(16), top), Font = new Font(Font, FontStyle.Bold) };
+        parent.Controls.Add(heading);
+        int x = S(16) + heading.PreferredSize.Width + S(8);
+        parent.Controls.Add(new Label
+        {
+            BorderStyle = BorderStyle.Fixed3D,
+            Bounds = new Rectangle(x, top + heading.PreferredSize.Height / 2, S(520) - x, 2),
+        });
+    }
+
+    /// <summary>
+    /// The zoom set with Ctrl+wheel on top of the fit. Not editable here — it is set by zooming
+    /// the page — but visible, and resettable, so the dialog is not silent about it.
+    /// </summary>
+    private void ShowUserZoom()
+    {
+        bool shown = _fitToCell.Checked && Math.Abs(_zoomScale - 1.0) > 0.001;
+        _userZoom.Text = shown ? $"Ctrl+휠 {_zoomScale * 100:0}%" : string.Empty;
+        _userZoom.Visible = shown;
+        _resetZoom.Visible = shown;
+    }
+
     private int S(int logical) => (int)Math.Round(logical * DeviceDpi / 96.0);
 
     private void LoadFrom(CellConfig c)
@@ -212,9 +269,12 @@ public sealed class CellSettingsForm : Form
         _fitToCell.Checked = c.FitToCell;
         _zoom.Value = (decimal)Math.Clamp(c.ZoomFactor <= 0 ? 1.0 : c.ZoomFactor, 0.25, 4.0);
         _zoom.Enabled = !c.FitToCell;
+        ShowUserZoom();
         _preventLogout.Checked = c.PreventLogout;
         _keepAliveSeconds.Value = Math.Clamp(c.KeepAliveSeconds <= 0 ? 60 : c.KeepAliveSeconds, 10, 3600);
         _refreshMinutes.Value = Math.Clamp(c.RefreshMinutes, 0, 1440);
+        _keepSignedIn.Checked = c.KeepSignedIn;
+        _returnAfterLogin.Checked = c.ReturnAfterLogin;
         _keepAliveSeconds.Enabled = c.PreventLogout;
         _exe.Text = c.ExecutablePath;
         _args.Text = c.Arguments;
@@ -278,11 +338,15 @@ public sealed class CellSettingsForm : Form
             ProfileName = _profile.Text.Trim(),
             FitToCell = _fitToCell.Checked,
             ZoomFactor = (double)_zoom.Value,
+            // Not on the form; carried so saving the dialog does not undo the user's Ctrl+wheel.
+            ZoomScale = _zoomScale,
             PreventLogout = _preventLogout.Checked,
             KeepAliveSeconds = (int)_keepAliveSeconds.Value,
             RememberLastUrl = _rememberLast.Checked,
             LastUrl = _rememberedUrl,
             RefreshMinutes = (int)_refreshMinutes.Value,
+            KeepSignedIn = _keepSignedIn.Checked,
+            ReturnAfterLogin = _returnAfterLogin.Checked,
             ExecutablePath = _exe.Text.Trim(),
             Arguments = _args.Text.Trim(),
             WorkingDirectory = _workDir.Text.Trim(),

@@ -129,6 +129,13 @@ land on exactly 1.0, so zoom/unzoom rescales without reflowing the page. `Relayo
 reference width into every cell and `CellHost.OnResize` reapplies; the stored `ZoomFactor` is
 only consulted when `FitToCell` is off.
 
+The user's own zoom (Ctrl+wheel) *is* stored, as `CellConfig.ZoomScale` — a multiplier of the
+fit, not a factor, so it survives zoom/unzoom and restarts without reflowing the page.
+`CellHost.OnZoomFactorChanged` tells it from our own assignments by comparing against
+`_appliedZoom`, and ignores changes mid-navigation: WebView2 scopes a user zoom to the current
+page and reverts it on the next load, and that revert must not be recorded as the user zooming
+out. `NavigationCompleted` re-asserts the stored zoom.
+
 **Rearranging is a host swap, not a content move.** Dragging one cell onto another runs
 `MainForm.SwapCells`, which exchanges entries in `_cells` *and* `GridPreset.Cells` together and
 reassigns `CellHost.Index`. The hosts keep their WebView2 / reparented window and only get new
@@ -151,6 +158,15 @@ input mode already carries real activity and synthetic keys would land in the us
 Known limits: the events are `isTrusted: false`, so a site that checks that is not fooled, and
 `ExecuteScriptAsync` reaches the main frame only, so a dashboard inside an iframe is not covered.
 
+**Surviving a restart's login screen is two more per-cell options.** `CellConfig.KeepSignedIn`
+(off by default) has `CellHost.PersistSessionCookiesAsync` rewrite the profile's *session* cookies
+with an expiry, so they reach the disk — intranet logins are almost always session cookies, which
+is why every restart used to land on a login page. It is profile-wide, since cookies are.
+`ReturnAfterLogin` (on) has `CheckLoginAsync` treat a page with a password field as a login page;
+only one the cell was *sent* to (not `IsUserInitiated`) arms a single return to the last
+non-login page, so a failing login costs a login screen, never a navigation loop. A two-step
+login (ID page, then password page) is not recognised.
+
 The drag itself goes through `InputHook`, not WinForms drag-and-drop — hosted windows belong to
 other processes and eat the input first, the same reason the hooks exist. `OnGlobalMouseMove`
 promotes a left press past `DragThreshold` into a drag; `OnGlobalMouseUp` swallows the release so
@@ -164,6 +180,12 @@ insetting the sides would knock a zoomed cell off exactly 1.0 and reflow the hos
 time the user toggles the mode. It is painted by the form rather than hosted in a `Label`
 because the strip is form-owned canvas — a sibling control can be covered by the hosted window,
 a painted band cannot. `SetInteractive` therefore has to `Relayout` as well as `Invalidate`.
+
+**The cell name strip follows the same rule.** `AppState.ShowCellLabels` (on) has `Relayout` take
+`_labelStrip` px off the *bottom* of every grid cell, and `DrawCellLabel` paints number, title and
+setting badges there. `CellSlot(i)` — cell plus strip — is what frames, `InvalidateCellFrame` and
+`PublishHitTestMap` use, so a click on the strip is a click on the cell. The strip is 0 while a
+cell is zoomed, so a zoomed cell still fills the area.
 
 **Several copies on one machine are a supported arrangement, and every fixed path was a bug for
 it.** Three walls used to share one `state.json`: each loaded it at startup and each debounced

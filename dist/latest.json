@@ -1,7 +1,7 @@
 ﻿{
-    "version":  "1.0.10",
-    "url":  "https://github.com/knoxxr/GridDisplay/releases/download/v1.0.10/GridDisplay-1.0.10.zip",
-    "sha256":  "151FB6BC6FCC03FE0342939A43F428360EB740CEDAC79A74FBAC593300B7C6D1",
-    "notes":  "재시작할 때 칸에 설정된 주소로 열리도록 수정",
-    "published":  "2026-09-08"
+    "version":  "1.0.11",
+    "url":  "https://github.com/knoxxr/GridDisplay/releases/download/v1.0.11/GridDisplay-1.0.11.zip",
+    "sha256":  "2C930DB6D126ACFEB73F3A1141AC46C1D6BBC9314F0BC9D72557513FAD69FFD5",
+    "notes":  "줌 배율 저장, 재시작 후 로그인 유지·원래 화면 복귀, 화면 디자인 개선(셀 이름표, 도구 모음, 메뉴, 셀 설정)",
+    "published":  "2026-10-21"
 }

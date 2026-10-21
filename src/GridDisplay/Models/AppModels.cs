@@ -51,6 +51,13 @@ public sealed class CellConfig
     public bool FitToCell { get; set; } = true;
     /// <summary>Fixed zoom, used only when <see cref="FitToCell"/> is off.</summary>
     public double ZoomFactor { get; set; } = 1.0;
+    /// <summary>
+    /// The user's own zoom (Ctrl+wheel, Ctrl +/-) on top of <see cref="FitToCell"/>, kept as a
+    /// multiplier of the fit rather than as a factor: the fit changes every time the cell is
+    /// zoomed to the monitor and back, and a multiplier survives that — and a restart — with the
+    /// page laid out the same way. With fit off the user's zoom goes to <see cref="ZoomFactor"/>.
+    /// </summary>
+    public double ZoomScale { get; set; } = 1.0;
 
     /// <summary>
     /// Keep this cell's session alive while the wall sits idle. Off by default — it pokes the
@@ -59,6 +66,21 @@ public sealed class CellConfig
     public bool PreventLogout { get; set; }
     /// <summary>Seconds between keep-alive pulses. Clamped to 10..3600 by <see cref="GridPreset.Normalize"/>.</summary>
     public int KeepAliveSeconds { get; set; } = 60;
+
+    /// <summary>
+    /// Stay signed in across a restart. Most intranet systems issue their login as a *session*
+    /// cookie, which the browser drops when it closes, so every restart of the wall meant a login
+    /// screen in every cell. This rewrites those cookies with an expiry so they reach the disk.
+    /// Off by default: it keeps a credential on the machine, and it applies to the whole profile.
+    /// Whether the server still honours the session after the restart is the server's call.
+    /// </summary>
+    public bool KeepSignedIn { get; set; }
+
+    /// <summary>
+    /// When the site sends the cell to a login page, go back to where it was once the login is
+    /// done, instead of staying on whatever home page the site lands on afterwards.
+    /// </summary>
+    public bool ReturnAfterLogin { get; set; } = true;
 
     /// <summary>
     /// Reload this cell every N minutes; 0 leaves it to the wall-wide schedule. Here because one
@@ -155,6 +177,7 @@ public sealed class GridPreset
             c.KeepAliveSeconds = c.KeepAliveSeconds <= 0 ? 60 : Math.Clamp(c.KeepAliveSeconds, 10, 3600);
             // 0 is "follow the wall"; a minute is the shortest that is not simply thrashing.
             if (c.RefreshMinutes != 0) c.RefreshMinutes = Math.Clamp(c.RefreshMinutes, 1, 24 * 60);
+            c.ZoomScale = double.IsFinite(c.ZoomScale) && c.ZoomScale > 0 ? Math.Clamp(c.ZoomScale, 0.25, 4.0) : 1.0;
 
             // "Resume where it wandered to" used to be on for every cell, so a restart showed
             // the last page instead of the configured address. Files written back then cannot be
@@ -221,6 +244,12 @@ public class AppState
     public bool TopMostInFullScreen { get; set; }
     /// <summary>Gap in pixels between cells; also the space the selection/hover outline is drawn in.</summary>
     public int CellGap { get; set; } = 8;
+    /// <summary>
+    /// A thin strip under each cell in the grid with its number, name and what it is set to do
+    /// (stay signed in, refresh, zoom). Taken from the cell's height, never its width, so fit
+    /// zoom is unaffected; not drawn on a zoomed cell.
+    /// </summary>
+    public bool ShowCellLabels { get; set; } = true;
     /// <summary>Key that hands keyboard + mouse over to the hosted app (and takes it back).</summary>
     public Keys InputModeKey { get; set; } = Keys.F2;
     /// <summary>Let hidden browser cells release memory. Costs a few hundred ms when the cell is shown again.</summary>
