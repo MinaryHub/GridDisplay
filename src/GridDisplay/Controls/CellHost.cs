@@ -50,6 +50,23 @@ public sealed class CellHost : Panel
     private bool _suspended;
     private int _fitReference;
     private double _appliedZoom;
+    private bool _navigating;
+    private bool _navUserInitiated;
+
+    /// <summary>
+    /// A page counts as a login page when it shows a password field. Crude, and deliberately so:
+    /// it needs no per-site setup, and every intranet form login this was written for has one.
+    /// </summary>
+    private const string LoginPageProbe = "!!document.querySelector('input[type=password]')";
+
+    /// <summary>Last page reached that was not a login page — where to go back to.</summary>
+    private string _goodUrl = string.Empty;
+    /// <summary>Set when the site sent the cell to a login page; cleared once it has gone back.</summary>
+    private string? _returnTo;
+
+    /// <summary>Converted session cookies are given this long; Chromium caps expiry at 400 days.</summary>
+    private static readonly TimeSpan SignedInLifetime = TimeSpan.FromDays(400);
+    private readonly System.Windows.Forms.Timer _cookieTimer = new() { Interval = 5 * 60 * 1000 };
     private int _index;
     private bool _keepAliveActive = true;
 
@@ -93,6 +110,7 @@ public sealed class CellHost : Panel
         Controls.Add(_placeholder);
 
         _keepAlive.Tick += (_, _) => PulseKeepAlive();
+        _cookieTimer.Tick += (_, _) => _ = PersistSessionCookiesAsync();
 
         _refreshTimer.Tick += (_, _) =>
         {
@@ -138,10 +156,13 @@ public sealed class CellHost : Panel
 
     public CellConfig Config { get; private set; }
 
-    private string EmptyText => $"[{Index + 1}] 비어 있음\n클릭하여 설정";
+    private string EmptyText => $"{Index + 1}\n\n＋ 이 칸에 화면 추가\n클릭하여 웹 주소나 프로그램을 넣을 수 있습니다";
 
     /// <summary>Raised when the hosted content changes something worth persisting (URL, title).</summary>
     public event Action<CellHost>? StateChanged;
+
+    /// <summary>Raised when the user zooms the page themselves, so the wall can say it was kept.</summary>
+    public event Action<CellHost>? UserZoomed;
 
     public string StatusText
     {
@@ -268,13 +289,32 @@ public sealed class CellHost : Panel
 
         core.ProcessFailed += (_, e) => OnProcessFailed(e.ProcessFailedKind);
 
+        view.ZoomFactorChanged += (_, _) => OnZoomFactorChanged();
+        core.NavigationStarting += (_, e) =>
+        {
+            _navigating = true;
+            _navUserInitiated = e.IsUserInitiated;
+        };
+        core.NavigationCompleted += (_, e) =>
+        {
+            _navigating = false;
+            _appliedZoom = 0;
+            ApplyZoom();
+            if (!e.IsSuccess) return;
+            _ = CheckLoginAsync(_navUserInitiated);
+            _ = PersistSessionCookiesAsync();
+        };
+
         SyncRefreshTimer();
 
         _webReady = true;
         _appliedZoom = 0;
         ApplyZoom();
         SyncKeepAlive();
+        if (config.KeepSignedIn) _cookieTimer.Start();
 
+        _goodUrl = NormalizeUrl(config.StartUrl);
+        _returnTo = null;
         Navigate(config.StartUrl);
         StatusText = string.Empty;
     }
@@ -344,12 +384,67 @@ public sealed class CellHost : Panel
         ApplyZoom();
     }
 
+    /// <summary>The bare fit-to-cell factor, or 0 while the cell has no size to measure yet.</summary>
+    private double FitZoom()
+    {
+        int width = ClientSize.Width;
+        if (_fitReference <= 0 || width <= 0) return 0;
+        return (double)width / _fitReference;
+    }
+
     private double TargetZoom()
     {
-        if (!Config.FitToCell) return Config.ZoomFactor <= 0 ? 1.0 : Config.ZoomFactor;
-        int width = ClientSize.Width;
-        if (_fitReference <= 0 || width <= 0) return 1.0;
-        return Math.Clamp((double)width / _fitReference, MinZoom, MaxZoom);
+        if (!Config.FitToCell) return Math.Clamp(Config.ZoomFactor <= 0 ? 1.0 : Config.ZoomFactor, MinZoom, MaxZoom);
+        double fit = FitZoom();
+        double scale = Config.ZoomScale <= 0 ? 1.0 : Config.ZoomScale;
+        return Math.Clamp((fit <= 0 ? 1.0 : fit) * scale, MinZoom, MaxZoom);
+    }
+
+    /// <summary>
+    /// The page's zoom moved. Our own assignments land here too and are recognised by matching
+    /// what was last applied; anything else is the user (Ctrl+wheel, Ctrl +/-), and is recorded
+    /// so the next start comes up at the same size.
+    ///
+    /// Ignored mid-navigation: WebView2 treats a user zoom as belonging to the current page and
+    /// puts the app's factor back when a new one loads, and that revert must not be mistaken for
+    /// the user zooming back out. NavigationCompleted then re-asserts the recorded zoom.
+    /// </summary>
+    private void OnZoomFactorChanged()
+    {
+        if (_web is null || !_webReady || _navigating) return;
+        double actual;
+        try { actual = _web.ZoomFactor; } catch { return; }
+        if (Math.Abs(actual - _appliedZoom) < 0.0005) return;
+
+        if (Config.FitToCell)
+        {
+            double fit = FitZoom();
+            if (fit <= 0) return;
+            Config.ZoomScale = Math.Clamp(actual / fit, MinZoom, MaxZoom);
+        }
+        else
+        {
+            Config.ZoomFactor = Math.Clamp(actual, MinZoom, MaxZoom);
+        }
+
+        // Re-assigned so the factor is the app's own and outlives the page it was made on.
+        _appliedZoom = 0;
+        BeginInvoke(ApplyZoom);
+        StateChanged?.Invoke(this);
+        UserZoomed?.Invoke(this);
+    }
+
+    /// <summary>Whether the user has zoomed this cell away from where its settings put it.</summary>
+    public bool HasUserZoom => Config.Kind == CellKind.Browser && Config.FitToCell
+                               && Math.Abs(Config.ZoomScale - 1.0) > 0.001;
+
+    /// <summary>Drop the user's zoom and go back to the plain fit.</summary>
+    public void ResetZoom()
+    {
+        Config.ZoomScale = 1.0;
+        _appliedZoom = 0;
+        ApplyZoom();
+        StateChanged?.Invoke(this);
     }
 
     private void ApplyZoom()
@@ -449,6 +544,91 @@ public sealed class CellHost : Panel
         _recoverTimer.Start();
     }
 
+    /// <summary>
+    /// Bring the cell back to where it was after the site sent it through a login page.
+    ///
+    /// Only a login page the cell was *sent* to arms the return — a redirect from the server, a
+    /// page script, a reload of an expired session. One the user clicked through to is theirs,
+    /// and yanking them back from it would be wrong. The return fires once per interruption, so a
+    /// login that keeps failing costs a login screen, never a loop.
+    /// </summary>
+    private async Task CheckLoginAsync(bool userInitiated)
+    {
+        if (_web is null || !_webReady || !Config.ReturnAfterLogin) return;
+        var web = _web;
+
+        bool loginPage = await IsLoginPageAsync(web).ConfigureAwait(true);
+        // A page that builds its form from script may not have it yet; look once more.
+        if (!loginPage && _returnTo is null)
+        {
+            await Task.Delay(1500).ConfigureAwait(true);
+            loginPage = await IsLoginPageAsync(web).ConfigureAwait(true);
+        }
+        if (web != _web || !_webReady || _navigating) return;
+
+        string url;
+        try { url = web.CoreWebView2.Source; } catch { return; }
+
+        if (loginPage)
+        {
+            if (_returnTo is null && !userInitiated && !SameAddress(_goodUrl, url))
+            {
+                _returnTo = _goodUrl;
+                Services.HealthMonitor.Event($"셀 {Index + 1} 로그인 화면으로 이동됨 · 로그인 후 복귀 예정");
+            }
+            return;
+        }
+
+        if (_returnTo is { } target)
+        {
+            _returnTo = null;
+            if (!SameAddress(target, url))
+            {
+                Services.HealthMonitor.Event($"셀 {Index + 1} 로그인 완료 · 원래 화면으로 복귀");
+                Navigate(target);
+                return;
+            }
+        }
+        _goodUrl = url;
+    }
+
+    private static async Task<bool> IsLoginPageAsync(WebView2 web)
+    {
+        try { return await web.CoreWebView2.ExecuteScriptAsync(LoginPageProbe).ConfigureAwait(true) == "true"; }
+        catch { return false; }
+    }
+
+    private static bool SameAddress(string a, string b) =>
+        string.Equals(NormalizeUrl(a).TrimEnd('/'), NormalizeUrl(b).TrimEnd('/'), StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Give the profile's session cookies an expiry so they are written to disk and outlive the
+    /// browser. Intranet logins are nearly always session cookies, which is the whole reason a
+    /// restart lands every cell on a login screen. A converted cookie is no longer a session one,
+    /// so each is touched once; one the server re-issues comes back as a session cookie and is
+    /// simply converted again. Logging out still works — the server deletes the cookie outright.
+    /// </summary>
+    private async Task PersistSessionCookiesAsync()
+    {
+        if (_web is null || !_webReady || !Config.KeepSignedIn) return;
+        try
+        {
+            var manager = _web.CoreWebView2.CookieManager;
+            var cookies = await manager.GetCookiesAsync(null).ConfigureAwait(true);
+            var until = DateTime.Now + SignedInLifetime;
+            foreach (var cookie in cookies)
+            {
+                if (!cookie.IsSession) continue;
+                cookie.Expires = until;
+                manager.AddOrUpdateCookie(cookie);
+            }
+        }
+        catch
+        {
+            // The cell may have been released underneath; the next pass tries again.
+        }
+    }
+
     /// <summary>Start or stop this cell's own refresh clock to match its configuration.</summary>
     private void SyncRefreshTimer()
     {
@@ -529,12 +709,15 @@ public sealed class CellHost : Panel
     public void Release()
     {
         _keepAlive.Stop();
+        _cookieTimer.Stop();
+        _returnTo = null;
         _cts?.Cancel();
         _cts?.Dispose();
         _cts = null;
         _webReady = false;
         _suspended = false;
         _appliedZoom = 0;
+        _navigating = false;
         LiveTitle = string.Empty;
 
         if (_native is not null)
@@ -562,6 +745,7 @@ public sealed class CellHost : Panel
         {
             Release();
             _keepAlive.Dispose();
+            _cookieTimer.Dispose();
             _recoverTimer.Dispose();
             _refreshTimer.Dispose();
         }
