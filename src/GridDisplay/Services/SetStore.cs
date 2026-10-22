@@ -189,7 +189,6 @@ public sealed class SetStore : IDisposable
                 StartFullScreen = StartFullScreen,
                 TopMostInFullScreen = TopMostInFullScreen,
                 CellGap = CellGap,
-                InputModeKey = InputModeKey,
                 SuspendHiddenCells = SuspendHiddenCells,
                 CellRecycleHours = CellRecycleHours,
                 UpdateFeedUrl = UpdateFeedUrl,

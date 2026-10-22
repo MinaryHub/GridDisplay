@@ -69,9 +69,10 @@ see it, so an overlay cannot reliably win. Two modes:
 - *view mode* — `InputHook.MouseCaptureEnabled` is true. `MainForm.OnGlobalMouseUp` swallows
   clicks that land on a cell and turns them into zoom/context-menu actions. Hosted apps see no
   clicks at all.
-- *input mode* — entered from a zoomed cell with `AppState.InputModeKey` (default F2). The mouse
-  hook stands down and the keyboard hook forwards everything except the release key, so `Esc`
-  and shortcuts reach the hosted app.
+- *input mode* — entered by zooming a cell (`ActivateCell`); there is no separate key for it.
+  The mouse hook stands down and the keyboard hook forwards everything except `Esc`, which
+  leaves input mode and the zoom together (`LeaveZoom`). The cost is that a hosted app never
+  receives `Esc`.
 
 **The hooks run on a thread of their own**, and that is load-bearing. A low-level hook callback
 is dispatched by the message pump of the thread that installed it, and Windows holds *every
@@ -173,15 +174,42 @@ promotes a left press past `DragThreshold` into a drag; `OnGlobalMouseUp` swallo
 it never turns into a zoom. Feedback is limited to dashed-source / solid-target cell frames,
 because the gap between cells is the only surface the form can paint on.
 
-**Input mode announces itself by taking height, never width.** `MainForm.InputStripHeight`
-carves an amber strip off the *top* of the zoomed cell and `DrawInputModeStrip` paints into it.
-Height is the only dimension that is free: fit zoom is cell width over grid-area width, so
-insetting the sides would knock a zoomed cell off exactly 1.0 and reflow the hosted page every
-time the user toggles the mode. It is painted by the form rather than hosted in a `Label`
-because the strip is form-owned canvas — a sibling control can be covered by the hosted window,
-a painted band cannot. `SetInteractive` therefore has to `Relayout` as well as `Invalidate`.
+**Input mode shows nothing over the cell.** There used to be an amber strip across the top; it was
+removed at the user's request, and `ShowBanner` returns early while `_interactive`, so no notice
+lands on a cell being worked in either. A zoomed cell in input mode fills the whole grid area.
 
-**The cell name strip follows the same rule.** `AppState.ShowCellLabels` (on) has `Relayout` take
+**Grid cells are still pictures unless asked to be live.** `MainForm.ApplyPresentation` (end of
+every `Relayout`) calls `CellHost.SetLive`: the zoomed cell is live, grid cells are live only with
+`CellConfig.LiveInGrid`. A still cell captures its page with `CapturePreviewAsync` into the
+`_still` PictureBox, hides the WebView and `TrySuspendAsync`s it — that sleep is the whole point,
+it is where a wall of dashboards spends its CPU, GPU and memory. Every
+`AppState.StillRefreshMinutes` (5) the page wakes *behind* the old picture, reloads, settles,
+is captured again and sleeps. Deliberate details: the page must be visible to paint, so capture
+happens with the WebView shown under the picture; a hidden cell (another one zoomed) is never
+captured, or the picture would be blank — instead `SetHidden` puts *every* browser cell behind a
+zoom to sleep, live-in-grid ones included, and `RefreshStillAsync`/`Reload` refuse to wake a
+hidden cell; a failed capture leaves the page running; a
+`PreventLogout` cell is hidden but not suspended, because its keep-alive timer must keep firing;
+`SetSuspended` stands aside for a still cell; `_stillWanted` survives `Release`, since it is the
+wall's wish rather than the content's state. Program cells are always live — another process's
+window cannot be put to sleep from here.
+
+**The cell menu is the only chrome, and it must close like a menu.** The toolbar (and F1) is gone;
+set switching, grid size, shortcuts and exit are in `_menu`. Because the hook swallows clicks on
+cells, the menu would never see the outside click that normally dismisses it: `_menuOpen` (set by
+`Opened`/`Closed`) makes `OnGlobalMouseDown` close the menu and swallow that press and its release
+(`_swallowRelease`), and `Esc` closes it from the keyboard hook.
+
+**A zoomed cell has a mouse way out.** `_closeZoom`, a round ✕ at the top centre, appears while
+the pointer is within ~90px of the top edge (polled by `_closeZoomTimer` while zoomed, because the
+mouse hook stands down in input mode) and calls `LeaveZoom`, the same as Esc. It is a sibling
+control brought to front, which sits above the hosted window where painting could not.
+
+**Painted chrome takes height, never width.** Fit zoom is cell width over grid-area width, so
+insetting the sides would knock a zoomed cell off exactly 1.0 and reflow the hosted page; height
+is the only free dimension. Chrome is painted by the form rather than hosted in a `Label`
+because a sibling control can be covered by the hosted window, a painted band cannot.
+`AppState.ShowCellLabels` (on) has `Relayout` take
 `_labelStrip` px off the *bottom* of every grid cell, and `DrawCellLabel` paints number, title and
 setting badges there. `CellSlot(i)` — cell plus strip — is what frames, `InvalidateCellFrame` and
 `PublishHitTestMap` use, so a click on the strip is a click on the cell. The strip is 0 while a
@@ -279,8 +307,8 @@ for consistency.
 
 - UI strings and user-facing messages are Korean; code, comments and identifiers are English.
 - The app runs `ApplicationHighDpiMode=PerMonitorV2`, so fonts scale with the monitor but
-  hard-coded pixel bounds do not. `MainForm.LayoutBar` therefore positions the toolbar from
-  measured text times `MainForm.Scaled(...)` on every relayout, and `CellSettingsForm` authors
+  hard-coded pixel bounds do not. `MainForm` sizes its painted chrome with `MainForm.Scaled(...)`
+  (there is no toolbar: everything it held lives in the cell menu), and `CellSettingsForm` authors
   every coordinate at 96 DPI and wraps it in its own `S(...)`, as do `PresetManagerForm` and
   `UpdateForm`. Copy one of those rather than nudging magic numbers.
   Rows of side-by-side controls (the kind radios) additionally advance by

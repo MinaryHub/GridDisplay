@@ -9,10 +9,10 @@ namespace GridDisplay.Forms;
 /// The display wall itself.
 ///
 /// Two interaction states:
-///   view mode  — the grid owns the mouse. Clicking a cell zooms it to the whole monitor,
-///                clicking again returns to the grid. Hosted apps never see these clicks.
-///   input mode — entered from a zoomed cell with the configured key (default F2). The mouse
-///                hook stands down and every keystroke except the release key goes to the app.
+///   view mode  — the grid owns the mouse. Clicking a cell zooms it to the whole monitor.
+///                Hosted apps never see these clicks.
+///   input mode — entered by zooming a cell. The mouse hook stands down and every keystroke
+///                except Esc goes to the app; Esc leaves input mode and the zoom together.
 ///
 /// Both states are enforced with low-level hooks rather than overlay windows, because the cells
 /// host windows owned by other processes that would otherwise consume the input first.
@@ -21,19 +21,12 @@ public sealed class MainForm : Form
 {
     private static readonly Color BackgroundColor = Color.FromArgb(14, 14, 16);
     private static readonly Color AccentColor = Color.FromArgb(70, 160, 255);
-    /// <summary>Amber, and used nowhere else — input mode is the one state that changes what the keyboard does.</summary>
-    private static readonly Color InputModeColor = Color.FromArgb(214, 118, 20);
 
     private readonly SetStore _store = new();
     private readonly InputHook _hook = new();
     private readonly List<CellHost> _cells = new();
     private readonly UpdateService _updates;
 
-    private readonly Panel _bar = new();
-    private readonly ComboBox _presetCombo = new();
-    private readonly NumericUpDown _colsSpin = new() { Minimum = 1, Maximum = 12, Value = 3 };
-    private readonly NumericUpDown _rowsSpin = new() { Minimum = 1, Maximum = 12, Value = 2 };
-    private readonly System.Windows.Forms.Timer _gridResizeDebounce = new();
     private readonly Label _banner = new();
     private readonly System.Windows.Forms.Timer _bannerTimer = new();
     private readonly System.Windows.Forms.Timer _updateTimer = new();
@@ -49,7 +42,6 @@ public sealed class MainForm : Form
     private ToolStripMenuItem _adoptUrlItem = null!;
     /// <summary>Shown only on a cell the user has zoomed with Ctrl+wheel.</summary>
     private ToolStripMenuItem _resetZoomItem = null!;
-    private readonly Button _exitButton;
 
     private GridPreset _preset = null!;
     private CancellationTokenSource? _applyCts;
@@ -74,17 +66,17 @@ public sealed class MainForm : Form
     /// </summary>
     private volatile IntPtr _formHandle;
 
+    /// <summary>The cell menu is up. Set on the UI thread, read by the hook.</summary>
+    private volatile bool _menuOpen;
+
     // Touched only by the hook thread, in press -> move -> release order.
+    private bool _swallowRelease;
     private int _pressedCell = -1;
     private Point _pressPoint;
     private MouseButtons _pressButton;
 
     private int _menuCell = -1;
     private bool _fullScreen;
-    private bool _barVisible;
-    private bool _suppressCombo;
-    private bool _suppressGridSpin;
-    private Control[] _barItems = Array.Empty<Control>();
 
     private Rectangle _restoreBounds;
     private FormWindowState _restoreState = FormWindowState.Normal;
@@ -109,16 +101,9 @@ public sealed class MainForm : Form
         var screen = Screen.PrimaryScreen ?? Screen.AllScreens[0];
         Bounds = Rectangle.Inflate(screen.WorkingArea, -60, -60);
 
-        // Fullscreen has no title bar, so the toolbar is the only way out that does not go
-        // through the context menu. Coloured apart from its neighbours because it is the one
-        // button on the bar that cannot be undone.
-        _exitButton = BarButton("종료", (_, _) => Close());
-        _exitButton.BackColor = Color.FromArgb(74, 46, 49);
-        _exitButton.ForeColor = Color.FromArgb(240, 154, 154);
-
-        BuildBar();
         BuildBanner();
         BuildMenu();
+        BuildCloseZoom();
 
         _hook.OnKeyDown = OnGlobalKeyDown;
         _hook.OnMouseDown = OnGlobalMouseDown;
@@ -168,6 +153,7 @@ public sealed class MainForm : Form
         // shared browser process, and it reads these.
         CellHost.BrowserArguments = S.BrowserArguments();
         CellHost.TrimBrowserMemory = S.BrowserMemorySaver;
+        CellHost.StillRefreshMinutes = S.StillRefreshMinutes;
 
         _hook.Install();
         if (S.StartFullScreen) SetFullScreen(true);
@@ -221,8 +207,6 @@ public sealed class MainForm : Form
         _selected = Math.Clamp(_selected, 0, Math.Max(0, _cells.Count - 1));
         Relayout();
         Invalidate();
-        UpdatePresetCombo();
-        UpdateGridSpin();
         UpdateTitle();
         _store.SaveSet(_preset);
 
@@ -262,22 +246,12 @@ public sealed class MainForm : Form
     private Rectangle GridArea()
     {
         var r = ClientRectangle;
-        if (_barVisible) r = new Rectangle(r.Left, r.Top + _bar.Height, r.Width, r.Height - _bar.Height);
         return r;
     }
 
     /// <summary>
-    /// Height of the input-mode warning strip, 0 in view mode.
-    ///
-    /// The strip is carved out of the top of the zoomed cell only. Fit zoom is cell width over
-    /// grid-area width, so taking height costs nothing, while insetting the sides would knock a
-    /// zoomed cell off exactly 1.0 and reflow the hosted page every time input mode is entered.
-    /// </summary>
-    private int InputStripHeight => _interactive ? Scaled(34) : 0;
-
-    /// <summary>
-    /// Height of the name strip under each grid cell, 0 when zoomed or turned off. Height, for
-    /// the same reason as the input strip: fit zoom only looks at width. Settled by
+    /// Height of the name strip under each grid cell, 0 when zoomed or turned off. Height, never
+    /// width: fit zoom is cell width over grid-area width, so only height is free. Settled by
     /// <see cref="Relayout"/>, which also shrinks it on a grid too dense to spare 24px.
     /// </summary>
     private int LabelStripHeight => _zoomed < 0 ? _labelStrip : 0;
@@ -297,15 +271,13 @@ public sealed class MainForm : Form
     {
         if (_cells.Count == 0 || _preset is null) return;
 
-        LayoutBar();
         var area = GridArea();
         int gap = Math.Max(0, S.CellGap);
 
         SuspendLayout();
         if (_zoomed >= 0 && _zoomed < _cells.Count)
         {
-            var zoomArea = Rectangle.FromLTRB(
-                area.Left, area.Top + InputStripHeight, area.Right, area.Bottom);
+            var zoomArea = area;
 
             for (int i = 0; i < _cells.Count; i++)
             {
@@ -343,13 +315,33 @@ public sealed class MainForm : Form
         // wherever cells move: zooming a cell, toggling the toolbar, resizing the window.
         foreach (var cell in _cells) cell.SetFitReference(area.Width);
 
-        _bar.Bounds = new Rectangle(0, 0, ClientSize.Width, _bar.Height);
-        if (_barVisible) _bar.BringToFront();
         PositionBanner();
         ResumeLayout(true);
 
         // Cells just moved, so the hook's cached copy is stale until this runs.
         PublishHitTestMap();
+        ApplyPresentation();
+    }
+
+    /// <summary>
+    /// Live or still for every cell. The zoomed cell is always live; in the grid only the cells
+    /// set to stay live are, and the rest show a picture while their page sleeps. Cells hidden
+    /// behind a zoom are left as they were — they are not on screen either way.
+    /// </summary>
+    private void ApplyPresentation()
+    {
+        for (int i = 0; i < _cells.Count; i++)
+        {
+            if (_zoomed >= 0)
+            {
+                if (i == _zoomed) _cells[i].SetLive(true);
+                else _cells[i].SetHidden();
+            }
+            else
+            {
+                _cells[i].SetLive(_cells[i].Config.LiveInGrid);
+            }
+        }
     }
 
     /// <summary>Refresh the hook thread's copy every time WinForms hands us a new window.</summary>
@@ -364,17 +356,7 @@ public sealed class MainForm : Form
     {
         base.OnPaint(e);
 
-        // Input mode hands the keyboard to another process, so it must be obvious at a glance and
-        // stay obvious — the transient banner has faded long before the user wonders why Esc is
-        // not working. Painted rather than hosted in a Label: the strip is form-owned canvas, so
-        // it cannot be covered by the hosted window the way a sibling control could.
-        if (_interactive)
-        {
-            DrawInputModeStrip(e.Graphics);
-            return;
-        }
-
-        if (_zoomed >= 0 || _cells.Count == 0) return;
+        if (_interactive || _zoomed >= 0 || _cells.Count == 0) return;
 
         using var idle = new Pen(Color.FromArgb(42, 42, 48), 1);
         using var selected = new Pen(Color.FromArgb(120, 120, 135), 2);
@@ -407,8 +389,8 @@ public sealed class MainForm : Form
 
     /// <summary>
     /// Number, name and the settings worth seeing from across the room, painted into the strip
-    /// under the cell. Painted rather than hosted in a Label for the input strip's reason: the
-    /// form owns this canvas, so a hosted window cannot cover it.
+    /// under the cell. Painted rather than hosted in a Label: the form owns this canvas, so a
+    /// hosted window cannot cover it the way it could a sibling control.
     /// </summary>
     private void DrawCellLabel(Graphics g, Rectangle clip, int index)
     {
@@ -427,11 +409,15 @@ public sealed class MainForm : Form
         // Badges from the right, so the name gets whatever room is left over.
         foreach (var (text, color) in CellBadges(cell))
         {
-            int w = TextRenderer.MeasureText(g, text, Font, Size.Empty, flags).Width;
+            // Measured and drawn without ellipsis, plus slack: measuring and drawing round
+            // differently, and with EndEllipsis a badge came out as "로…".
+            const TextFormatFlags badgeFlags = TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine |
+                                               TextFormatFlags.NoPadding;
+            int w = TextRenderer.MeasureText(g, text, Font, Size.Empty, badgeFlags).Width + Scaled(4);
             int dot = Scaled(7);
             if (right - w - dot - Scaled(5) < x + Scaled(80)) break;
             right -= w;
-            TextRenderer.DrawText(g, text, Font, new Rectangle(right, strip.Top, w, strip.Height), LabelDimColor, flags);
+            TextRenderer.DrawText(g, text, Font, new Rectangle(right, strip.Top, w, strip.Height), LabelDimColor, badgeFlags);
             right -= dot + Scaled(5);
             using var dotBrush = new SolidBrush(color);
             var smooth = g.SmoothingMode;
@@ -456,54 +442,11 @@ public sealed class MainForm : Form
     {
         var c = cell.Config;
         if (c.Kind != CellKind.Browser) yield break;
+        if (c.LiveInGrid) yield return ("실시간", Color.FromArgb(240, 120, 110));
         if (cell.HasUserZoom) yield return ($"배율 {c.ZoomScale * 100:0}%", AccentColor);
         if (c.RefreshMinutes > 0) yield return ($"{c.RefreshMinutes}분", LabelDimColor);
         if (c.PreventLogout) yield return ("로그아웃 방지", LabelOnColor);
         if (c.KeepSignedIn) yield return ("로그인 유지", LabelOnColor);
-    }
-
-    private void DrawInputModeStrip(Graphics g)
-    {
-        var area = GridArea();
-        var strip = new Rectangle(area.Left, area.Top, area.Width, InputStripHeight);
-        if (strip.Height <= 0) return;
-
-        using var fill = new SolidBrush(InputModeColor);
-        g.FillRectangle(fill, strip);
-
-        // Dark ink on the amber: white on this shade falls short of comfortable contrast.
-        var ink = Color.FromArgb(26, 18, 6);
-        const TextFormatFlags flags = TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine |
-                                      TextFormatFlags.NoPadding | TextFormatFlags.EndEllipsis;
-        using var bold = new Font(Font.FontFamily, 11f, FontStyle.Bold);
-        using var regular = new Font(Font.FontFamily, 11f);
-        int pad = Scaled(14);
-
-        // Right side first — how to get out is the part that must never be cut off.
-        string key = KeyName(S.InputModeKey);
-        const string back = "보기 모드로 돌아가기";
-        int backW = TextRenderer.MeasureText(g, back, regular, Size.Empty, flags).Width;
-        int keyW = TextRenderer.MeasureText(g, key, bold, Size.Empty, flags).Width + Scaled(12);
-        int keyH = Math.Min(strip.Height - Scaled(10), Scaled(22));
-        int right = strip.Right - pad;
-        TextRenderer.DrawText(g, back, regular, new Rectangle(right - backW, strip.Top, backW, strip.Height), ink, flags);
-        right -= backW + Scaled(8);
-        var cap = new Rectangle(right - keyW, strip.Top + (strip.Height - keyH) / 2, keyW, keyH);
-        using (var capBrush = new SolidBrush(ink)) g.FillRectangle(capBrush, cap);
-        TextRenderer.DrawText(g, key, bold, cap, Color.FromArgb(255, 217, 168),
-            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
-        right = cap.Left - Scaled(24);
-
-        int x = strip.Left + pad;
-        const string title = "입력 모드";
-        int titleW = TextRenderer.MeasureText(g, title, bold, Size.Empty, flags).Width;
-        TextRenderer.DrawText(g, title, bold, new Rectangle(x, strip.Top, titleW, strip.Height), ink, flags);
-        x += titleW + Scaled(12);
-
-        string cell = _zoomed >= 0 && _zoomed < _cells.Count ? $"셀 {_zoomed + 1} · {_cells[_zoomed].HeaderText}" : "이 화면";
-        if (right > x)
-            TextRenderer.DrawText(g, $"키보드와 마우스가 {cell}(으)로 바로 전달됩니다", regular,
-                new Rectangle(x, strip.Top, right - x, strip.Height), ink, flags);
     }
 
     private void InvalidateCellFrame(int index)
@@ -560,6 +503,17 @@ public sealed class MainForm : Form
     {
         if (_interactive || _closing) return false;
         if (index < 0) return false;
+
+        // The menu never sees a click that lands on a cell — the hook takes it first — so it
+        // would stay open. A click outside it closes it and does nothing else, as menus do.
+        if (_menuOpen)
+        {
+            _swallowRelease = true;
+            _pressedCell = -1;
+            Post(() => _menu.Close(ToolStripDropDownCloseReason.AppClicked));
+            return true;
+        }
+
         _pressedCell = index;
         _pressPoint = screen;
         _pressButton = button;
@@ -569,6 +523,12 @@ public sealed class MainForm : Form
     private bool OnGlobalMouseUp(MouseButtons button, Point screen, int index)
     {
         if (_interactive || _closing) return false;
+        if (_swallowRelease)
+        {
+            // The release of the click that closed the menu.
+            _swallowRelease = false;
+            return true;
+        }
         int pressed = _pressedCell;
         _pressedCell = -1;
 
@@ -658,29 +618,26 @@ public sealed class MainForm : Form
         // Cached: see _formHandle. Never Handle, which belongs to the UI thread.
         if (NativeMethods.GetForegroundWindow() != _formHandle) return false;
 
-        var releaseKey = S.InputModeKey;
-
         if (_interactive)
         {
-            // Everything except the release key belongs to the hosted app — including Esc,
-            // which plenty of apps need.
-            if (key == releaseKey)
+            // Esc is the one key kept back: it leaves input mode and the zoom together, straight
+            // back to the grid. Everything else belongs to the hosted app.
+            if (key == Keys.Escape)
             {
-                Post(() => SetInteractive(false));
+                Post(LeaveZoom);
                 return true;
             }
             return false;
         }
 
-        if (key == releaseKey)
-        {
-            Post(() => SetInteractive(true));
-            return true;
-        }
-
         switch (key)
         {
             case Keys.Escape:
+                if (_menuOpen)
+                {
+                    Post(() => _menu.Close(ToolStripDropDownCloseReason.Keyboard));
+                    return true;
+                }
                 if (_dragFrom >= 0)
                 {
                     int from = _dragFrom, over = _dragOver;
@@ -718,9 +675,6 @@ public sealed class MainForm : Form
                 Post(ToggleFullScreenByUser);
                 return true;
 
-            case Keys.F1:
-                Post(ToggleBar);
-                return true;
         }
 
         if ((key & Keys.Control) == Keys.Control)
@@ -789,7 +743,23 @@ public sealed class MainForm : Form
             EditCell(index);
             return;
         }
+        bool zoomingIn = _zoomed != index;
         ToggleZoom(index);
+
+        // A cell is zoomed to be used, so hand it the input straight away.
+        if (zoomingIn && _zoomed == index) SetInteractive(true);
+    }
+
+    /// <summary>Back to the grid from a zoomed cell, leaving input mode on the way.</summary>
+    private void LeaveZoom()
+    {
+        if (_zoomed < 0)
+        {
+            if (_interactive) SetInteractive(false);
+            return;
+        }
+        ToggleZoom(_zoomed);
+        ShowBanner("격자 보기");
     }
 
     private int DragThreshold => Math.Max(SystemInformation.DragSize.Width, Scaled(6));
@@ -840,6 +810,9 @@ public sealed class MainForm : Form
         Relayout();
         Invalidate();
         UpdateTitle();
+
+        if (_zoomed >= 0) _closeZoomTimer.Start();
+        else UpdateCloseZoom();
     }
 
     private void SetInteractive(bool on)
@@ -858,8 +831,6 @@ public sealed class MainForm : Form
         _interactive = on;
         _hook.MouseCaptureEnabled = !on;
 
-        // The warning strip is carved out of the zoomed cell, so entering or leaving input mode
-        // has to move it.
         Relayout();
         Invalidate();
         PublishHitTestMap();
@@ -871,20 +842,21 @@ public sealed class MainForm : Form
         if (on)
         {
             CellAt(_zoomed)?.FocusContent();
-            ShowBanner($"입력 모드 — {KeyName(S.InputModeKey)} 키로 해제");
+            // Nothing is announced over a cell being worked in; clear whatever was showing.
+            _bannerTimer.Stop();
+            _banner.Visible = false;
         }
         else
         {
             // Focus currently sits in another process's window; a plain Focus() will not move it.
             Activate();
             NativeMethods.ForceFocus(Handle);
-            ShowBanner("보기 모드 — 클릭하면 격자로 돌아갑니다");
         }
         UpdateTitle();
     }
 
     /// <summary>
-    /// F11, the toolbar button and the menu item all land here, and only here does the choice
+    /// F11 and the menu item both land here, and only here does the choice
     /// stick. <see cref="SetFullScreen"/> itself must stay silent: zooming a cell also goes
     /// fullscreen, and that is a view state, not a preference about how the app should start.
     /// </summary>
@@ -928,188 +900,7 @@ public sealed class MainForm : Form
 
     // ------------------------------------------------------------------ chrome
 
-    private void BuildBar()
-    {
-        _bar.BackColor = Color.FromArgb(28, 28, 33);
-        _bar.Visible = false;
-
-        _presetCombo.DropDownStyle = ComboBoxStyle.DropDownList;
-        _presetCombo.SelectedIndexChanged += (_, _) =>
-        {
-            if (_suppressCombo) return;
-            int i = _presetCombo.SelectedIndex;
-            if (i >= 0 && i < _store.Sets.Count && _store.Sets[i].Id != _preset.Id)
-                _ = LoadPresetAsync(_store.Sets[i]);
-        };
-
-        _colsSpin.ValueChanged += (_, _) => QueueGridResize();
-        _rowsSpin.ValueChanged += (_, _) => QueueGridResize();
-
-        // A resize rebuilds every cell, so committing on each spinner click would restart the
-        // wall three times on the way from 3 to 6 columns. Let the clicks settle first.
-        _gridResizeDebounce.Interval = 600;
-        _gridResizeDebounce.Tick += (_, _) =>
-        {
-            _gridResizeDebounce.Stop();
-            SetGridSize((int)_colsSpin.Value, (int)_rowsSpin.Value);
-        };
-
-        // Left: what is on the wall (set, grid) and what to do with it. Right: the app itself.
-        // The long shortcut sentence that used to run across the bar now sits behind one button.
-        var dim = Color.FromArgb(154, 154, 166);
-        var shortcuts = BarButton("단축키", (s, _) => ShowShortcuts((Control)s!));
-        shortcuts.BackColor = _bar.BackColor;
-        shortcuts.ForeColor = Color.FromArgb(184, 184, 194);
-        var version = BarButton($"v{AppVersion.Display}", (_, _) => ShowUpdateDialog());
-        version.BackColor = _bar.BackColor;
-        version.ForeColor = dim;
-
-        _barItems = new Control[]
-        {
-            BarLabel("세트", dim),
-            _presetCombo,
-            BarLabel("격자", dim),
-            _colsSpin,
-            BarLabel("×", dim),
-            _rowsSpin,
-            BarDivider(),
-            BarButton("셀 설정…", (_, _) => EditCell(_selected)),
-            BarButton("세트 관리…", (_, _) => ManagePresets()),
-        };
-        _barRightItems = new Control[]
-        {
-            shortcuts,
-            version,
-            BarButton("전체 화면", (_, _) => ToggleFullScreenByUser()),
-            _exitButton,
-        };
-        _bar.Controls.AddRange(_barItems);
-        _bar.Controls.AddRange(_barRightItems);
-
-        Controls.Add(_bar);
-        LayoutBar();
-    }
-
-    /// <summary>
-    /// Lay the bar out from measured text at the current DPI instead of fixed pixels. The project
-    /// runs PerMonitorV2, so fonts grow with the monitor's scaling while hard-coded bounds would
-    /// not — at 150% the button captions clip. Re-run on every relayout so a move to a monitor
-    /// with different scaling is picked up too.
-    /// </summary>
-    private void LayoutBar()
-    {
-        if (_barItems.Length == 0) return;
-
-        int pad = Scaled(10), gap = Scaled(8);
-        _bar.Height = Scaled(40);
-        int x = pad;
-
-        foreach (var item in _barItems)
-        {
-            if (!BarItemShown(item)) { item.Visible = false; continue; }
-            item.Visible = true;
-
-            var size = BarItemSize(item);
-            item.Bounds = new Rectangle(x, (_bar.Height - size.Height) / 2, size.Width, size.Height);
-            x += size.Width + gap;
-        }
-
-        // The right group is anchored to the right corner rather than flowing with the row: 종료
-        // is the one control on the bar that cannot be undone, so it should not sit next to the
-        // buttons clicked often, and its position must not shift as set names grow. Laid out
-        // from the right; on a window too narrow for both groups it stops at the left group.
-        int width = _barRightItems.Sum(i => BarItemSize(i).Width) + gap * (_barRightItems.Length - 1);
-        int rx = Math.Max(x, ClientSize.Width - pad - width);
-        foreach (var item in _barRightItems)
-        {
-            item.Visible = true;
-            var size = BarItemSize(item);
-            item.Bounds = new Rectangle(rx, (_bar.Height - size.Height) / 2, size.Width, size.Height);
-            rx += size.Width + gap;
-        }
-    }
-
-    private Control[] _barRightItems = Array.Empty<Control>();
-
-    private static Panel BarDivider() => new() { BackColor = Color.FromArgb(52, 52, 60) };
-
-    /// <summary>The shortcuts that used to be spelled out across the bar, one click away.</summary>
-    private void ShowShortcuts(Control anchor)
-    {
-        var menu = new ContextMenuStrip
-        {
-            Renderer = _menu.Renderer,
-            BackColor = DarkMenuColors.Background,
-            ShowImageMargin = false,
-        };
-        foreach (var (key, what) in new[]
-                 {
-                     ("F1", "도구 모음 표시/숨김"),
-                     (KeyName(S.InputModeKey), "입력 모드 (크게 본 셀에 직접 입력)"),
-                     ("F11", "전체 화면"),
-                     ("Ctrl+1~9", "세트 바꾸기"),
-                     ("방향키 · Enter", "셀 고르기 · 크게 보기"),
-                     ("우클릭", "셀 메뉴"),
-                 })
-        {
-            menu.Items.Add(new ToolStripMenuItem(what) { ShortcutKeyDisplayString = key, ForeColor = LabelTextColor });
-        }
-        menu.Closed += (_, _) => BeginInvoke(menu.Dispose);
-        menu.Show(anchor, new Point(0, anchor.Height));
-    }
-
-    private Size BarItemSize(Control item) => item switch
-    {
-        ComboBox => new Size(Scaled(220), item.PreferredSize.Height),
-        // Wide enough for two digits next to the spin buttons at any scale.
-        NumericUpDown => new Size(Scaled(58), Scaled(26)),
-        Panel => new Size(Math.Max(1, Scaled(1)), Scaled(22)),
-        // Measured text, not PreferredSize — a non-autosize Button reports a far wider
-        // preferred width and the row runs off the right edge.
-        Button b => new Size(TextRenderer.MeasureText(b.Text, b.Font).Width + Scaled(24), Scaled(26)),
-        _ => item.PreferredSize,
-    };
-
-    /// <summary>
-    /// Every bar item is shown; the hook is kept because a child of the hidden bar reports
-    /// <c>Visible == false</c> whatever was set, so any future gating must read a field rather
-    /// than <c>Control.Visible</c> or it would drop the whole row from the layout.
-    /// </summary>
-    private static bool BarItemShown(Control item) => true;
-
     private int Scaled(int logical) => (int)Math.Round(logical * DeviceDpi / 96.0);
-
-    private static Label BarLabel(string text, Color color) => new()
-    {
-        Text = text,
-        ForeColor = color,
-        AutoSize = true,
-    };
-
-    private static Button BarButton(string text, EventHandler onClick)
-    {
-        var b = new Button
-        {
-            Text = text,
-            FlatStyle = FlatStyle.Flat,
-            BackColor = Color.FromArgb(48, 48, 56),
-            ForeColor = Color.White,
-            TabStop = false,
-            AutoSize = false,
-        };
-        b.FlatAppearance.BorderSize = 0;
-        b.Click += onClick;
-        return b;
-    }
-
-    private void ToggleBar()
-    {
-        _barVisible = !_barVisible;
-        _bar.Visible = _barVisible;
-        if (_barVisible) _bar.BringToFront();
-        Relayout();
-        Invalidate();
-    }
 
     private void BuildBanner()
     {
@@ -1131,6 +922,8 @@ public sealed class MainForm : Form
 
     private void ShowBanner(string text)
     {
+        // Input mode shows the hosted app and nothing else over it.
+        if (_interactive) return;
         _banner.Text = text;
         _banner.Visible = true;
         _banner.BringToFront();
@@ -1150,6 +943,74 @@ public sealed class MainForm : Form
 
     private ToolStripLabel _menuHeader = null!;
     private ToolStripMenuItem _labelsItem = null!;
+    private ToolStripMenuItem _liveItem = null!;
+
+    /// <summary>
+    /// The mouse's way out of a zoomed cell, as a browser's fullscreen shows one: a round ✕ at the
+    /// top centre that appears only while the pointer is near the top edge, so it never sits over
+    /// the page otherwise. A sibling control rather than painting — the form cannot paint over the
+    /// hosted window, but a control brought to front sits above it.
+    /// </summary>
+    private readonly Button _closeZoom = new();
+    private readonly ToolTip _closeZoomTip = new();
+    /// <summary>
+    /// Polls the pointer while a cell is zoomed. The hook cannot help: in input mode it stands
+    /// down for the mouse, and it must not touch controls anyway.
+    /// </summary>
+    private readonly System.Windows.Forms.Timer _closeZoomTimer = new() { Interval = 150 };
+
+    private void BuildCloseZoom()
+    {
+        int size = Scaled(48);
+        _closeZoom.Text = "✕";
+        _closeZoom.Font = new Font("Segoe UI", 14f, FontStyle.Bold);
+        _closeZoom.FlatStyle = FlatStyle.Flat;
+        _closeZoom.FlatAppearance.BorderSize = 0;
+        _closeZoom.FlatAppearance.MouseOverBackColor = Color.FromArgb(70, 70, 80);
+        _closeZoom.BackColor = Color.FromArgb(40, 40, 48);
+        _closeZoom.ForeColor = Color.White;
+        _closeZoom.TabStop = false;
+        _closeZoom.Visible = false;
+        _closeZoom.Size = new Size(size, size);
+        using (var round = new System.Drawing.Drawing2D.GraphicsPath())
+        {
+            round.AddEllipse(0, 0, size, size);
+            _closeZoom.Region = new Region(round);
+        }
+        _closeZoom.Click += (_, _) => LeaveZoom();
+        _closeZoomTip.SetToolTip(_closeZoom, "격자로 돌아가기 (Esc)");
+        Controls.Add(_closeZoom);
+
+        _closeZoomTimer.Tick += (_, _) => UpdateCloseZoom();
+    }
+
+    private void UpdateCloseZoom()
+    {
+        if (_zoomed < 0)
+        {
+            _closeZoomTimer.Stop();
+            _closeZoom.Visible = false;
+            return;
+        }
+
+        var area = GridArea();
+        var pointer = PointToClient(Cursor.Position);
+        var band = new Rectangle(area.Left, area.Top, area.Width, Scaled(90));
+        bool show = band.Contains(pointer) && NativeMethods.GetForegroundWindow() == Handle;
+        if (show)
+        {
+            _closeZoom.Location = new Point(area.Left + (area.Width - _closeZoom.Width) / 2, area.Top + Scaled(16));
+            if (!_closeZoom.Visible)
+            {
+                _closeZoom.Visible = true;
+                _closeZoom.BringToFront();
+            }
+        }
+        else if (_closeZoom.Visible && !_closeZoom.Bounds.Contains(pointer))
+        {
+            _closeZoom.Visible = false;
+        }
+    }
 
     /// <summary>
     /// Three groups — this cell, the arrangement, the app — with the one destructive cell action
@@ -1163,6 +1024,8 @@ public sealed class MainForm : Form
         _menu.ShowImageMargin = false;
         // Room for the tick on "셀 이름표 표시".
         _menu.ShowCheckMargin = true;
+        _menu.Opened += (_, _) => _menuOpen = true;
+        _menu.Closed += (_, _) => _menuOpen = false;
 
         _menuHeader = new ToolStripLabel { ForeColor = LabelDimColor, Margin = new Padding(4, 4, 4, 2) };
         _menu.Items.Add(_menuHeader);
@@ -1170,25 +1033,87 @@ public sealed class MainForm : Form
         _menu.Items.Add("새로 고침", null, (_, _) => CellAt(_menuCell)?.Reload());
         _resetZoomItem = new ToolStripMenuItem("배율 원래대로", null, (_, _) => CellAt(_menuCell)?.ResetZoom());
         _menu.Items.Add(_resetZoomItem);
+        _liveItem = new ToolStripMenuItem("격자에서도 실시간 표시", null, (_, _) => ToggleLiveInGrid(_menuCell));
+        _menu.Items.Add(_liveItem);
         _adoptUrlItem = new ToolStripMenuItem("현재 주소를 이 칸의 주소로", null, (_, _) => AdoptCurrentUrl(_menuCell));
         _menu.Items.Add(_adoptUrlItem);
         _menu.Items.Add("셀 다시 시작", null, (_, _) => RestartCell(_menuCell));
         _menu.Items.Add(new ToolStripSeparator());
+        _menu.Items.Add(BuildSetMenu());
         _menu.Items.Add(BuildGridSizeMenu());
-        _menu.Items.Add(new ToolStripMenuItem("세트 관리…", null, (_, _) => ManagePresets()) { ShortcutKeyDisplayString = "Ctrl+1~9" });
+        _menu.Items.Add("세트 관리…", null, (_, _) => ManagePresets());
         _menu.Items.Add("현재 배치를 새 세트로 저장…", null, (_, _) => SaveAsNewPreset());
         _labelsItem = new ToolStripMenuItem("셀 이름표 표시", null, (_, _) => ToggleCellLabels());
         _menu.Items.Add(_labelsItem);
         _menu.Items.Add(new ToolStripSeparator());
-        _menu.Items.Add(new ToolStripMenuItem("도구 모음 표시/숨김", null, (_, _) => ToggleBar()) { ShortcutKeyDisplayString = "F1" });
         _menu.Items.Add(new ToolStripMenuItem("전체 화면", null, (_, _) => ToggleFullScreenByUser()) { ShortcutKeyDisplayString = "F11" });
-        _menu.Items.Add("버전 및 업데이트…", null, (_, _) => ShowUpdateDialog());
+        _menu.Items.Add(BuildShortcutMenu());
+        _menu.Items.Add($"버전 및 업데이트…  (v{AppVersion.Display})", null, (_, _) => ShowUpdateDialog());
         _menu.Items.Add(new ToolStripSeparator());
         _menu.Items.Add(new ToolStripMenuItem("셀 비우기", null, (_, _) => ClearCell(_menuCell)) { ForeColor = Color.FromArgb(240, 154, 154) });
         _menu.Items.Add("종료", null, (_, _) => Close());
 
         foreach (ToolStripItem item in _menu.Items)
             if (item is ToolStripMenuItem m && m.ForeColor == SystemColors.ControlText) m.ForeColor = LabelTextColor;
+    }
+
+    /// <summary>
+    /// Every set, the open one ticked, each with its Ctrl+N. Rebuilt on open — sets are added,
+    /// renamed and reordered underneath this menu.
+    /// </summary>
+    private ToolStripMenuItem BuildSetMenu()
+    {
+        var item = new ToolStripMenuItem("세트 바꾸기") { ForeColor = LabelTextColor };
+        StyleDropDown(item);
+        // A placeholder so the arrow shows before the first open fills it.
+        item.DropDownItems.Add(new ToolStripMenuItem("…"));
+        item.DropDownOpening += (_, _) =>
+        {
+            item.DropDownItems.Clear();
+            var sets = _store.Sets.ToList();
+            for (int i = 0; i < sets.Count; i++)
+            {
+                var set = sets[i];
+                var entry = new ToolStripMenuItem($"{set.Name}  ({set.Columns}×{set.Rows})", null,
+                    (_, _) => { if (set.Id != _preset.Id) _ = LoadPresetAsync(set); })
+                {
+                    Checked = set.Id == _preset?.Id,
+                    ShortcutKeyDisplayString = i < 9 ? $"Ctrl+{i + 1}" : string.Empty,
+                    ForeColor = LabelTextColor,
+                };
+                item.DropDownItems.Add(entry);
+            }
+        };
+        return item;
+    }
+
+    /// <summary>The keys there are, for whoever has not learned them yet.</summary>
+    private ToolStripMenuItem BuildShortcutMenu()
+    {
+        var item = new ToolStripMenuItem("단축키") { ForeColor = LabelTextColor };
+        StyleDropDown(item);
+        foreach (var (key, what) in new[]
+                 {
+                     ("클릭 · Enter", "크게 보고 바로 입력"),
+                     ("Esc", "격자로 돌아가기 · 메뉴 닫기"),
+                     ("방향키", "셀 고르기"),
+                     ("Ctrl+1~9", "세트 바꾸기"),
+                     ("Ctrl+R", "선택한 셀 새로 고침"),
+                     ("F11", "전체 화면"),
+                     ("우클릭", "이 메뉴"),
+                 })
+        {
+            item.DropDownItems.Add(new ToolStripMenuItem(what) { ShortcutKeyDisplayString = key, ForeColor = LabelTextColor });
+        }
+        return item;
+    }
+
+    private void StyleDropDown(ToolStripMenuItem item)
+    {
+        // A submenu draws with its own renderer, not its parent's.
+        item.DropDown.Renderer = _menu.Renderer;
+        item.DropDown.BackColor = DarkMenuColors.Background;
+        if (item.DropDown is ToolStripDropDownMenu dd) { dd.ShowImageMargin = false; dd.ShowCheckMargin = true; }
     }
 
     private void ToggleCellLabels()
@@ -1225,8 +1150,8 @@ public sealed class MainForm : Form
     }
 
     /// <summary>
-    /// Common shapes, so reshaping the wall does not require the toolbar or the set dialog.
-    /// Arbitrary sizes up to 12×12 stay available through the toolbar spinners.
+    /// Common shapes, so reshaping the wall does not require the set dialog. Arbitrary sizes up
+    /// to 12×12 stay available there.
     /// </summary>
     private ToolStripMenuItem BuildGridSizeMenu()
     {
@@ -1234,10 +1159,8 @@ public sealed class MainForm : Form
         foreach (var (cols, rows) in new[] { (1, 1), (2, 1), (2, 2), (3, 2), (3, 3), (4, 2), (4, 3), (4, 4) })
             item.DropDownItems.Add($"{cols} × {rows}", null, (_, _) => SetGridSize(cols, rows));
 
-        // A submenu draws with its own renderer, not its parent's.
-        item.DropDown.Renderer = _menu.Renderer;
+        StyleDropDown(item);
         foreach (ToolStripItem entry in item.DropDownItems) entry.ForeColor = LabelTextColor;
-        if (item.DropDown is ToolStripDropDownMenu dd) { dd.ShowImageMargin = false; dd.ShowCheckMargin = true; }
 
         // Ticks are refreshed on open — the open set changes underneath this menu.
         item.DropDownOpening += (_, _) =>
@@ -1257,6 +1180,9 @@ public sealed class MainForm : Form
         InvalidateCellFrame(index);
         UpdateAdoptUrlItem(index);
         _labelsItem.Checked = S.ShowCellLabels;
+        var menuHost = CellAt(index);
+        _liveItem.Available = menuHost?.Config.Kind == CellKind.Browser;
+        _liveItem.Checked = menuHost?.Config.LiveInGrid == true;
         var host = CellAt(index);
         string name = host is null ? string.Empty : host.Config.IsConfigured ? host.HeaderText : "비어 있음";
         if (name.Length > 40) name = name[..40] + "…";
@@ -1318,8 +1244,27 @@ public sealed class MainForm : Form
         UpdateTitle();
         Invalidate();
 
-        try { await _cells[index].ApplyAsync(updated).ConfigureAwait(true); }
+        try
+        {
+            var applying = _cells[index].ApplyAsync(updated);
+            // The new settings may have turned live-in-grid on or off.
+            ApplyPresentation();
+            await applying.ConfigureAwait(true);
+        }
         catch { }
+    }
+
+    private void ToggleLiveInGrid(int index)
+    {
+        var cell = CellAt(index);
+        if (cell is null || cell.Config.Kind != CellKind.Browser) return;
+        cell.Config.LiveInGrid = !cell.Config.LiveInGrid;
+        _store.SaveSet(_preset);
+        ApplyPresentation();
+        InvalidateCellFrame(index);
+        ShowBanner(cell.Config.LiveInGrid
+            ? $"셀 {index + 1} 격자에서도 실시간으로 표시"
+            : $"셀 {index + 1} 격자에서는 정지 화면으로 표시");
     }
 
     private async void RestartCell(int index)
@@ -1340,13 +1285,6 @@ public sealed class MainForm : Form
         Invalidate();
     }
 
-    private void QueueGridResize()
-    {
-        if (_suppressGridSpin) return;
-        _gridResizeDebounce.Stop();
-        _gridResizeDebounce.Start();
-    }
-
     /// <summary>
     /// Reshape the open set's grid. Cells keep their (row, column), so growing preserves
     /// everything and shrinking discards only what falls outside the new bounds.
@@ -1354,13 +1292,10 @@ public sealed class MainForm : Form
     private void SetGridSize(int cols, int rows)
     {
         if (_preset is null) return;
-        _gridResizeDebounce.Stop();
-
         cols = Math.Clamp(cols, 1, 12);
         rows = Math.Clamp(rows, 1, 12);
         if (cols == _preset.Columns && rows == _preset.Rows)
         {
-            UpdateGridSpin();
             return;
         }
 
@@ -1370,7 +1305,6 @@ public sealed class MainForm : Form
                 $"격자를 {cols}×{rows}로 줄이면 설정된 셀 {dropped}개가 삭제됩니다.\n계속할까요?",
                 "격자 크기", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
         {
-            UpdateGridSpin();
             return;
         }
 
@@ -1413,8 +1347,6 @@ public sealed class MainForm : Form
         }
 
         _store.SaveSet(_preset);
-        UpdatePresetCombo();
-        UpdateGridSpin();
         UpdateTitle();
 
         if (result == DialogResult.OK && chosen is not null && chosen.Id != openId)
@@ -1436,27 +1368,7 @@ public sealed class MainForm : Form
         if (string.IsNullOrWhiteSpace(name)) return;
 
         var copy = _store.Add(_preset.Duplicate(name.Trim()));
-        UpdatePresetCombo();
         ShowBanner($"'{copy.Name}' 세트로 저장했습니다");
-    }
-
-    private void UpdatePresetCombo()
-    {
-        _suppressCombo = true;
-        _presetCombo.Items.Clear();
-        foreach (var p in _store.Sets) _presetCombo.Items.Add($"{p.Name}  ({p.Columns}×{p.Rows})");
-        int index = _store.Sets.ToList().FindIndex(p => p.Id == _preset?.Id);
-        if (index >= 0) _presetCombo.SelectedIndex = index;
-        _suppressCombo = false;
-    }
-
-    private void UpdateGridSpin()
-    {
-        if (_preset is null) return;
-        _suppressGridSpin = true;
-        _colsSpin.Value = Math.Clamp(_preset.Columns, 1, 12);
-        _rowsSpin.Value = Math.Clamp(_preset.Rows, 1, 12);
-        _suppressGridSpin = false;
     }
 
     private void UpdateTitle()
@@ -1468,7 +1380,6 @@ public sealed class MainForm : Form
         Text = $"Grid Display {AppVersion.Display} — {_preset?.Name} [{mode}]{cell}";
     }
 
-    private static string KeyName(Keys key) => key.ToString();
 
     /// <summary>Minimal single-line text prompt; WinForms has no built-in one.</summary>
     private static string? Prompt(string caption, string initial)
@@ -1625,7 +1536,6 @@ public sealed class MainForm : Form
             _bannerTimer.Dispose();
             _updateTimer.Dispose();
             _maintenanceTimer.Dispose();
-            _gridResizeDebounce.Dispose();
             _menu.Dispose();
             _store.Dispose();
             _applyCts?.Dispose();

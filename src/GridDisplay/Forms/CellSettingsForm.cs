@@ -18,6 +18,7 @@ public sealed class CellSettingsForm : Form
     private readonly NumericUpDown _keepAliveSeconds = new() { Minimum = 10, Maximum = 3600, Increment = 10, Value = 60 };
     private readonly NumericUpDown _refreshMinutes = new() { Minimum = 0, Maximum = 1440, Increment = 5, Value = 0 };
     private readonly CheckBox _keepSignedIn = new() { Text = "다시 켜도 로그인 유지 (같은 프로필 전체에 적용)", AutoSize = true };
+    private readonly CheckBox _liveInGrid = new() { Text = "격자에서도 실시간으로 표시 (끄면 정지 화면 · 자원 절약)", AutoSize = true };
     private readonly CheckBox _returnAfterLogin = new() { Text = "로그인 화면을 거친 뒤 원래 화면으로 돌아가기", AutoSize = true, Checked = true };
     private readonly CheckBox _rememberLast = new() { Text = "마지막으로 열었던 주소로 시작 (끄면 항상 위 주소)", AutoSize = true };
     private readonly Label _lastUrl = new() { AutoSize = false, ForeColor = SystemColors.GrayText, AutoEllipsis = true };
@@ -53,7 +54,7 @@ public sealed class CellSettingsForm : Form
         Font = new Font("Segoe UI", 9f);
         // Every coordinate below is authored at 96 DPI and scaled: the app runs PerMonitorV2, so
         // the font grows with the monitor's scaling and raw pixel bounds would clip the captions.
-        ClientSize = new Size(S(560), S(616));
+        ClientSize = new Size(S(560), S(642));
 
         int y = S(12);
 
@@ -79,7 +80,7 @@ public sealed class CellSettingsForm : Form
         // --- browser ---
         // Four sections in the order a cell is set up: where it points, how it looks, how it
         // stays signed in, how often it reloads. Each starts with a heading and a rule.
-        _browserBox.Bounds = new Rectangle(S(12), y, S(536), S(446));
+        _browserBox.Bounds = new Rectangle(S(12), y, S(536), S(472));
 
         AddSection(_browserBox, "주소", S(20));
         _browserBox.Controls.Add(new Label { Text = "주소", Bounds = new Rectangle(S(16), S(47), S(80), S(20)) });
@@ -124,31 +125,34 @@ public sealed class CellSettingsForm : Form
         _browserBox.Controls.Add(_profile);
         _browserBox.Controls.Add(new Label { Text = "비우면 공용 · 이름이 다르면 다른 계정", Bounds = new Rectangle(S(288), S(212), S(232), S(20)), ForeColor = SystemColors.GrayText });
 
-        AddSection(_browserBox, "로그인", S(244));
-        _keepSignedIn.Location = new Point(S(100), S(266));
+        _liveInGrid.Location = new Point(S(100), S(238));
+        _browserBox.Controls.Add(_liveInGrid);
+
+        AddSection(_browserBox, "로그인", S(270));
+        _keepSignedIn.Location = new Point(S(100), S(292));
         _browserBox.Controls.Add(_keepSignedIn);
-        _returnAfterLogin.Location = new Point(S(100), S(290));
+        _returnAfterLogin.Location = new Point(S(100), S(316));
         _browserBox.Controls.Add(_returnAfterLogin);
-        _preventLogout.Location = new Point(S(100), S(314));
+        _preventLogout.Location = new Point(S(100), S(340));
         _browserBox.Controls.Add(_preventLogout);
-        _browserBox.Controls.Add(new Label { Text = "확인 주기", Bounds = new Rectangle(S(16), S(343), S(80), S(20)) });
-        _keepAliveSeconds.Bounds = new Rectangle(S(100), S(340), S(74), S(23));
+        _browserBox.Controls.Add(new Label { Text = "확인 주기", Bounds = new Rectangle(S(16), S(369), S(80), S(20)) });
+        _keepAliveSeconds.Bounds = new Rectangle(S(100), S(366), S(74), S(23));
         _browserBox.Controls.Add(_keepAliveSeconds);
         _browserBox.Controls.Add(new Label
         {
             Text = "초 · 보기 모드에서만 동작",
-            Bounds = new Rectangle(S(182), S(343), S(200), S(20)),
+            Bounds = new Rectangle(S(182), S(369), S(200), S(20)),
             ForeColor = SystemColors.GrayText,
         });
 
-        AddSection(_browserBox, "새로 고침", S(376));
-        _browserBox.Controls.Add(new Label { Text = "주기", Bounds = new Rectangle(S(16), S(405), S(80), S(20)) });
-        _refreshMinutes.Bounds = new Rectangle(S(100), S(402), S(74), S(23));
+        AddSection(_browserBox, "새로 고침", S(402));
+        _browserBox.Controls.Add(new Label { Text = "주기", Bounds = new Rectangle(S(16), S(431), S(80), S(20)) });
+        _refreshMinutes.Bounds = new Rectangle(S(100), S(428), S(74), S(23));
         _browserBox.Controls.Add(_refreshMinutes);
         _browserBox.Controls.Add(new Label
         {
             Text = "분마다 · 0이면 전체 설정을 따름",
-            Bounds = new Rectangle(S(182), S(405), S(240), S(20)),
+            Bounds = new Rectangle(S(182), S(431), S(240), S(20)),
             ForeColor = SystemColors.GrayText,
         });
         Controls.Add(_browserBox);
@@ -186,8 +190,8 @@ public sealed class CellSettingsForm : Form
         _programBox.Controls.Add(_closeOnRelease);
         Controls.Add(_programBox);
 
-        var ok = new Button { Text = "확인", DialogResult = DialogResult.OK, Bounds = new Rectangle(S(376), S(574), S(84), S(30)) };
-        var cancel = new Button { Text = "취소", DialogResult = DialogResult.Cancel, Bounds = new Rectangle(S(464), S(574), S(84), S(30)) };
+        var ok = new Button { Text = "확인", DialogResult = DialogResult.OK, Bounds = new Rectangle(S(376), S(600), S(84), S(30)) };
+        var cancel = new Button { Text = "취소", DialogResult = DialogResult.Cancel, Bounds = new Rectangle(S(464), S(600), S(84), S(30)) };
         Controls.Add(ok);
         Controls.Add(cancel);
         AcceptButton = ok;
@@ -275,6 +279,7 @@ public sealed class CellSettingsForm : Form
         _refreshMinutes.Value = Math.Clamp(c.RefreshMinutes, 0, 1440);
         _keepSignedIn.Checked = c.KeepSignedIn;
         _returnAfterLogin.Checked = c.ReturnAfterLogin;
+        _liveInGrid.Checked = c.LiveInGrid;
         _keepAliveSeconds.Enabled = c.PreventLogout;
         _exe.Text = c.ExecutablePath;
         _args.Text = c.Arguments;
@@ -347,6 +352,7 @@ public sealed class CellSettingsForm : Form
             RefreshMinutes = (int)_refreshMinutes.Value,
             KeepSignedIn = _keepSignedIn.Checked,
             ReturnAfterLogin = _returnAfterLogin.Checked,
+            LiveInGrid = _liveInGrid.Checked,
             ExecutablePath = _exe.Text.Trim(),
             Arguments = _args.Text.Trim(),
             WorkingDirectory = _workDir.Text.Trim(),

@@ -83,6 +83,13 @@ public sealed class CellConfig
     public bool ReturnAfterLogin { get; set; } = true;
 
     /// <summary>
+    /// Keep the page running in the grid. Off by default: a grid cell shows a still picture of
+    /// its page and the page sleeps, which is most of the CPU, GPU and memory a wall of
+    /// dashboards spends. Zooming a cell always makes it live. Browser cells only.
+    /// </summary>
+    public bool LiveInGrid { get; set; }
+
+    /// <summary>
     /// Reload this cell every N minutes; 0 leaves it to the wall-wide schedule. Here because one
     /// heavy page should not set the pace for the rest — a map that has to be refreshed every
     /// quarter hour is no reason to disturb twenty cells that are perfectly happy for a day.
@@ -250,8 +257,11 @@ public class AppState
     /// zoom is unaffected; not drawn on a zoomed cell.
     /// </summary>
     public bool ShowCellLabels { get; set; } = true;
-    /// <summary>Key that hands keyboard + mouse over to the hosted app (and takes it back).</summary>
-    public Keys InputModeKey { get; set; } = Keys.F2;
+    /// <summary>
+    /// Minutes between fresh pictures of a still grid cell (reload, settle, capture, sleep);
+    /// 0 keeps the first picture until the cell is zoomed or refreshed by hand.
+    /// </summary>
+    public int StillRefreshMinutes { get; set; } = 5;
     /// <summary>Let hidden browser cells release memory. Costs a few hundred ms when the cell is shown again.</summary>
     public bool SuspendHiddenCells { get; set; }
 
@@ -346,9 +356,9 @@ public class AppState
 
         CellGap = Math.Clamp(CellGap, 0, 64);
         CellRecycleHours = Math.Clamp(CellRecycleHours, 0, 24 * 30);
+        StillRefreshMinutes = Math.Clamp(StillRefreshMinutes, 0, 24 * 60);
         // 0 is "no ceiling"; anything else has to be big enough for a page to actually run in.
         if (BrowserHeapLimitMB != 0) BrowserHeapLimitMB = Math.Clamp(BrowserHeapLimitMB, 64, 4096);
         UpdateCheckHours = Math.Clamp(UpdateCheckHours <= 0 ? 24 : UpdateCheckHours, 1, 24 * 7);
-        if (InputModeKey == Keys.None) InputModeKey = Keys.F2;
     }
 }

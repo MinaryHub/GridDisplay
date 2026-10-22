@@ -71,6 +71,32 @@ public sealed class CellHost : Panel
     private bool _keepAliveActive = true;
 
     /// <summary>
+    /// Still-image presentation. A grid of live dashboards spends CPU, GPU and memory redrawing
+    /// pages nobody is reading closely, so a cell in the grid shows a captured frame and its page
+    /// is put to sleep; it wakes only when zoomed, or every <see cref="StillRefreshMinutes"/> to
+    /// take a fresh picture. <see cref="CellConfig.LiveInGrid"/> opts a cell out.
+    /// </summary>
+    private readonly PictureBox _still = new()
+    {
+        Dock = DockStyle.Fill,
+        SizeMode = PictureBoxSizeMode.StretchImage,
+        BackColor = Color.FromArgb(24, 24, 27),
+        Visible = false,
+    };
+    private readonly System.Windows.Forms.Timer _stillTimer = new();
+    /// <summary>The wall wants a still picture here (it is in the grid and not live).</summary>
+    private bool _stillWanted;
+    /// <summary>The page is hidden behind the picture right now.</summary>
+    private bool _frozen;
+    /// <summary>Bumped on every presentation change, so a capture that finishes late is dropped.</summary>
+    private int _stillGen;
+    private bool _firstLoadDone;
+    private TaskCompletionSource<bool>? _loadWaiter;
+
+    /// <summary>Minutes between fresh pictures of a still cell; 0 leaves the first one in place.</summary>
+    public static int StillRefreshMinutes { get; set; } = 5;
+
+    /// <summary>
     /// Recovery state for a dead render process. A wall runs for weeks, so a renderer will die
     /// eventually — out of memory, a driver reset, a page that faults. Backing off matters as
     /// much as retrying: a page that dies on load would otherwise reload forever, and a hundred
@@ -108,6 +134,14 @@ public sealed class CellHost : Panel
             Text = string.Empty,
         };
         Controls.Add(_placeholder);
+        Controls.Add(_still);
+
+        _stillTimer.Tick += (_, _) =>
+        {
+            if (!_stillWanted || !Visible) return;
+            if (RefreshAllowed is not null && !RefreshAllowed()) return;
+            _ = RefreshStillAsync(reload: true, settleMs: 4000);
+        };
 
         _keepAlive.Tick += (_, _) => PulseKeepAlive();
         _cookieTimer.Tick += (_, _) => _ = PersistSessionCookiesAsync();
@@ -300,6 +334,14 @@ public sealed class CellHost : Panel
             _navigating = false;
             _appliedZoom = 0;
             ApplyZoom();
+            _loadWaiter?.TrySetResult(e.IsSuccess);
+            if (!_firstLoadDone)
+            {
+                // The first picture can only be taken once there is a page to take it of.
+                _firstLoadDone = true;
+                // Also when hidden behind a zoom: RefreshStillAsync puts an unseen page to sleep.
+                if (_stillWanted || !Visible) _ = RefreshStillAsync(reload: false, settleMs: 4000);
+            }
             if (!e.IsSuccess) return;
             _ = CheckLoginAsync(_navUserInitiated);
             _ = PersistSessionCookiesAsync();
@@ -312,6 +354,7 @@ public sealed class CellHost : Panel
         ApplyZoom();
         SyncKeepAlive();
         if (config.KeepSignedIn) _cookieTimer.Start();
+        if (_stillWanted) StartStillTimer();
 
         _goodUrl = NormalizeUrl(config.StartUrl);
         _returnTo = null;
@@ -465,7 +508,7 @@ public sealed class CellHost : Panel
     }
 
     /// <summary>
-    /// Keep-alive runs in view mode only. While the hosted app has the input (F2) the user is
+    /// Keep-alive runs in view mode only. While the hosted app has the input the user is
     /// generating real activity anyway, and synthetic key events would collide with typing.
     /// </summary>
     public void SetKeepAliveActive(bool active)
@@ -650,10 +693,177 @@ public sealed class CellHost : Panel
 
     public void Reload()
     {
+        // Asleep behind a zoom: leave it. It is refreshed when it is back in view.
+        if (_frozen && !Visible) return;
+        // A still cell reloads behind its picture and then takes a new one.
+        if (_stillWanted && _webReady)
+        {
+            _ = RefreshStillAsync(reload: true, settleMs: 4000);
+            return;
+        }
         if (_web is not null && _webReady)
         {
             try { _web.CoreWebView2.Reload(); } catch { }
         }
+    }
+
+    /// <summary>
+    /// Live or still, as the wall decides: live when zoomed or when the cell is set to stay live,
+    /// still otherwise. Only browser cells take part — another process's window cannot be put
+    /// to sleep from here, so program cells are always live.
+    /// </summary>
+    public void SetLive(bool live)
+    {
+        if (Config.Kind != CellKind.Browser) return;
+        if (live)
+        {
+            if (!_stillWanted && !_frozen) return;
+            _stillWanted = false;
+            _stillGen++;
+            _stillTimer.Stop();
+            Thaw();
+            return;
+        }
+
+        // Relayout calls in here on every resize step; once pictured there is nothing to do. A
+        // cell put to sleep behind a zoom before it was ever pictured still needs its picture.
+        if (_stillWanted && _frozen && _still.Image is not null) return;
+        _stillWanted = true;
+        StartStillTimer();
+        // Coming back from a zoom: the page has to settle at its new size and zoom before the
+        // picture is taken. Before the first load there is nothing to take; that waits for it.
+        if (_firstLoadDone) _ = RefreshStillAsync(reload: false, settleMs: 800);
+    }
+
+    /// <summary>
+    /// Another cell is zoomed and this one is out of sight: sleep, whatever the grid setting.
+    /// Nothing here is on screen, so even a live-in-grid cell has no reason to run. No picture
+    /// is taken — a hidden page paints nothing — and the grid takes one on the way back if needed.
+    /// </summary>
+    public void SetHidden()
+    {
+        if (Config.Kind != CellKind.Browser || _web is null || !_webReady) return;
+        _stillGen++;
+        if (!_frozen) Freeze();
+    }
+
+    private void StartStillTimer()
+    {
+        if (StillRefreshMinutes <= 0 || _stillTimer.Enabled) return;
+        _stillTimer.Interval = (int)TimeSpan.FromMinutes(StillRefreshMinutes).TotalMilliseconds;
+        _stillTimer.Start();
+    }
+
+    /// <summary>Whether this cell is showing a picture rather than the running page.</summary>
+    public bool IsStill => _frozen;
+
+    /// <summary>
+    /// Wake the page behind the current picture, optionally reload it, let it settle, take a new
+    /// picture and put the page back to sleep. If the capture fails the page is left running —
+    /// a live cell is better than a blank one.
+    /// </summary>
+    private async Task RefreshStillAsync(bool reload, int settleMs)
+    {
+        if (_web is null || !_webReady) return;
+        int gen = ++_stillGen;
+        var web = _web;
+
+        // Out of sight (another cell is zoomed): waking it would only run a page nobody sees.
+        if (!Visible)
+        {
+            if (!_frozen) Freeze();
+            return;
+        }
+
+        // The page has to be on screen to paint; the old picture stays over it meanwhile.
+        if (_still.Image is not null)
+        {
+            _still.Visible = true;
+            _still.BringToFront();
+            if (_placeholder.Visible) _placeholder.BringToFront();
+        }
+        Wake();
+
+        try
+        {
+            if (reload)
+            {
+                _loadWaiter = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                try { web.CoreWebView2.Reload(); } catch { return; }
+                await Task.WhenAny(_loadWaiter.Task, Task.Delay(30000)).ConfigureAwait(true);
+            }
+            await Task.Delay(settleMs).ConfigureAwait(true);
+            if (gen != _stillGen || !_stillWanted || web != _web) return;
+            // Hidden while it settled: a hidden page paints nothing, and a blank picture would
+            // stay up until the next refresh. Back to sleep; the grid pictures it on return.
+            if (!Visible)
+            {
+                Freeze();
+                return;
+            }
+
+            using var stream = new MemoryStream();
+            await web.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Jpeg, stream)
+                .ConfigureAwait(true);
+            if (gen != _stillGen || !_stillWanted || web != _web) return;
+
+            stream.Position = 0;
+            Bitmap frame;
+            using (var decoded = Image.FromStream(stream)) frame = new Bitmap(decoded);
+            var old = _still.Image;
+            _still.Image = frame;
+            old?.Dispose();
+            Freeze();
+        }
+        catch
+        {
+            // Left running: see the summary.
+        }
+    }
+
+    private void Freeze()
+    {
+        if (_web is null) return;
+        _still.Visible = true;
+        _still.BringToFront();
+        if (_placeholder.Visible) _placeholder.BringToFront();
+        _web.Visible = false;
+        _frozen = true;
+
+        // A keep-alive cell must keep running — its timer is what holds the session — so it is
+        // only hidden, which already stops it painting. Everything else sleeps outright.
+        if (Config.PreventLogout || _suspended) return;
+        try
+        {
+            _suspended = true;
+            _ = _web.CoreWebView2.TrySuspendAsync();
+            ApplyMemoryTarget(suspended: true);
+        }
+        catch { }
+    }
+
+    /// <summary>Bring the page back and show it, live.</summary>
+    private void Thaw()
+    {
+        Wake();
+        _frozen = false;
+        _still.Visible = false;
+        if (_web is not null) _web.BringToFront();
+        if (_placeholder.Visible) _placeholder.BringToFront();
+    }
+
+    private void Wake()
+    {
+        if (_web is null) return;
+        _web.Visible = true;
+        if (!_suspended) return;
+        _suspended = false;
+        try
+        {
+            _web.CoreWebView2.Resume();
+            ApplyMemoryTarget(suspended: false);
+        }
+        catch { }
     }
 
     /// <summary>Hand keyboard focus to the hosted content so typing reaches the app.</summary>
@@ -695,6 +905,8 @@ public sealed class CellHost : Panel
         // A cell asked to stay signed in must stay running — suspending it is exactly the idleness
         // the keep-alive exists to prevent.
         if (suspend && Config.PreventLogout) return;
+        // A still cell manages its own sleep; resuming it here would leave it running unseen.
+        if (_stillWanted) return;
         if (_web is null || !_webReady || suspend == _suspended) return;
         _suspended = suspend;
         try
@@ -711,6 +923,17 @@ public sealed class CellHost : Panel
         _keepAlive.Stop();
         _cookieTimer.Stop();
         _returnTo = null;
+        _stillTimer.Stop();
+        _stillGen++;
+        // _stillWanted is the wall's wish, not the content's state, so it outlives a restart of
+        // the cell: the new page is pictured once it has loaded.
+        _frozen = false;
+        _firstLoadDone = false;
+        _loadWaiter?.TrySetResult(false);
+        _loadWaiter = null;
+        _still.Visible = false;
+        _still.Image?.Dispose();
+        _still.Image = null;
         _cts?.Cancel();
         _cts?.Dispose();
         _cts = null;
@@ -746,6 +969,7 @@ public sealed class CellHost : Panel
             Release();
             _keepAlive.Dispose();
             _cookieTimer.Dispose();
+            _stillTimer.Dispose();
             _recoverTimer.Dispose();
             _refreshTimer.Dispose();
         }
