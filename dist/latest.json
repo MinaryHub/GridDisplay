@@ -1,7 +1,7 @@
 ﻿{
-    "version":  "1.0.11",
-    "url":  "https://github.com/knoxxr/GridDisplay/releases/download/v1.0.11/GridDisplay-1.0.11.zip",
-    "sha256":  "2C930DB6D126ACFEB73F3A1141AC46C1D6BBC9314F0BC9D72557513FAD69FFD5",
-    "notes":  "줌 배율 저장, 재시작 후 로그인 유지·원래 화면 복귀, 화면 디자인 개선(셀 이름표, 도구 모음, 메뉴, 셀 설정)",
-    "published":  "2026-10-21"
+    "version":  "1.0.12",
+    "url":  "https://github.com/knoxxr/GridDisplay/releases/download/v1.0.12/GridDisplay-1.0.12.zip",
+    "sha256":  "376B04EDA952B7794D367C4E60AEE9A2B7835E36C5BE8A6773D4D602B584D9D4",
+    "notes":  "격자는 정지 화면(자원 절약)·크게 보면 실시간, 클릭하면 바로 입력·Esc로 복귀, 확대 화면 ✕ 버튼, 도구 모음(F1)·F2 제거, 우클릭 메뉴로 세트 바꾸기, 메뉴 밖 클릭/Esc로 닫기",
+    "published":  "2026-10-22"
 }
