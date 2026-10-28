@@ -1,10 +1,10 @@
 ﻿<#
 .SYNOPSIS
-    Capture the store-listing screenshots into screenshots\.
+    Capture the store-listing screenshots into screenshots\en\ and screenshots\ko\.
 
 .DESCRIPTION
     The app keeps its data in a fixed folder (%APPDATA%\GridDisplay), so this swaps in demo sets
-    showing the fictional dashboards under screenshots\demo\, drives the app with synthetic input,
+    showing the fictional dashboards under screenshots\demo\<lang>\, drives the app with synthetic input,
     and always puts the original folder back afterwards — even when a step fails.
 
     Runs on the primary monitor and takes it over for about a minute. Do not touch the mouse
@@ -14,6 +14,7 @@
     .\tools\capture-screenshots.ps1
     .\tools\capture-screenshots.ps1 -Exe .\src\GridDisplay\bin\Release\net8.0-windows10.0.19041.0\win-x64\GridDisplay.exe
     .\tools\capture-screenshots.ps1 -PauseProcesses VirtualDesktopIndicator
+    .\tools\capture-screenshots.ps1 -Language ko
 #>
 [CmdletBinding()]
 param(
@@ -21,7 +22,11 @@ param(
 
     # Programs that draw over the screen (desktop indicators, recorders…). Closed for the
     # capture and started again from the same path afterwards.
-    [string[]]$PauseProcesses = @()
+    [string[]]$PauseProcesses = @(),
+
+    # UI languages to shoot, each into screenshots\<lang>\ with the matching demo pages.
+    [ValidateSet('en', 'ko')]
+    [string[]]$Language = @('en', 'ko')
 )
 
 $ErrorActionPreference = 'Stop'
@@ -66,7 +71,7 @@ function Shot([string]$name) {
     $g = [System.Drawing.Graphics]::FromImage($bmp)
     $g.CopyFromScreen($screen.Location, [System.Drawing.Point]::Empty, $screen.Size)
     $g.Dispose()
-    $path = Join-Path $outDir $name
+    $path = Join-Path $script:shotDir $name
     $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
     $bmp.Dispose()
     Write-Host "  $name" -ForegroundColor Green
@@ -119,34 +124,58 @@ function CloseWindow($e) {
 }
 
 # --- demo data -----------------------------------------------------------------
-function Cell([string]$title, [string]$page) {
+# Per language: the demo set and cell names, and the captions this script looks for on screen.
+# The captions must match the app's L.T(...) strings exactly.
+$texts = @{
+    en = @{
+        Sets = 'Factory overview', 'Business KPIs', 'Server room'
+        Cells = @{ production = 'Production'; servers = 'Server monitoring'; logistics = 'Logistics'
+                   sales = 'Sales'; alarms = 'Equipment alarms'; energy = 'Energy usage' }
+        CellSettingsItem = 'Cell settings*'; CellSettingsTitle = 'Cell 3 settings'; BrowserRadio = 'Browser (WebView2)'
+        ManageSetsItem = 'Manage sets*'; ManageSetsTitle = 'Manage sets'
+    }
+    ko = @{
+        Sets = '공장 상황판', '경영 지표', '서버실'
+        Cells = @{ production = '생산 현황'; servers = '서버 모니터링'; logistics = '물류 현황'
+                   sales = '매출 대시보드'; alarms = '설비 알람'; energy = '에너지 사용량' }
+        CellSettingsItem = '셀 설정*'; CellSettingsTitle = '셀 3 설정'; BrowserRadio = '브라우저 (WebView2)'
+        ManageSetsItem = '세트 관리*'; ManageSetsTitle = '세트 관리'
+    }
+}
+
+function Cell([string]$lang, [string]$page) {
     [ordered]@{
         Kind = 1   # CellKind.Browser — the app reads enums as numbers
-        Title = $title
-        Url = ([Uri](Join-Path $demoDir $page)).AbsoluteUri
+        Title = $texts[$lang].Cells[$page]
+        Url = ([Uri](Join-Path $demoDir "$lang\$page.html")).AbsoluteUri
         LiveInGrid = $true   # live rather than a still capture, so the shot needs no settling time
     }
 }
 
-$sets = @(
-    [ordered]@{ SchemaVersion = 1; Id = [guid]::NewGuid().ToString('N'); Name = 'Factory overview'; Order = 1; Columns = 3; Rows = 2; Cells = @(
-        (Cell 'Production' 'production.html'), (Cell 'Server monitoring' 'servers.html'), (Cell 'Logistics' 'logistics.html'),
-        (Cell 'Sales' 'sales.html'), (Cell 'Equipment alarms' 'alarms.html'), (Cell 'Energy usage' 'energy.html')) },
-    [ordered]@{ SchemaVersion = 1; Id = [guid]::NewGuid().ToString('N'); Name = 'Business KPIs'; Order = 2; Columns = 2; Rows = 2; Cells = @(
-        (Cell 'Sales' 'sales.html'), (Cell 'Production' 'production.html'),
-        (Cell 'Energy usage' 'energy.html'), (Cell 'Logistics' 'logistics.html')) },
-    [ordered]@{ SchemaVersion = 1; Id = [guid]::NewGuid().ToString('N'); Name = 'Server room'; Order = 3; Columns = 2; Rows = 1; Cells = @(
-        (Cell 'Server monitoring' 'servers.html'), (Cell 'Equipment alarms' 'alarms.html')) }
-)
+function DemoSets([string]$lang) {
+    $n = $texts[$lang].Sets
+    @(
+        [ordered]@{ SchemaVersion = 1; Id = [guid]::NewGuid().ToString('N'); Name = $n[0]; Order = 1; Columns = 3; Rows = 2; Cells = @(
+            (Cell $lang 'production'), (Cell $lang 'servers'), (Cell $lang 'logistics'),
+            (Cell $lang 'sales'), (Cell $lang 'alarms'), (Cell $lang 'energy')) },
+        [ordered]@{ SchemaVersion = 1; Id = [guid]::NewGuid().ToString('N'); Name = $n[1]; Order = 2; Columns = 2; Rows = 2; Cells = @(
+            (Cell $lang 'sales'), (Cell $lang 'production'),
+            (Cell $lang 'energy'), (Cell $lang 'logistics')) },
+        [ordered]@{ SchemaVersion = 1; Id = [guid]::NewGuid().ToString('N'); Name = $n[2]; Order = 3; Columns = 2; Rows = 1; Cells = @(
+            (Cell $lang 'servers'), (Cell $lang 'alarms')) }
+    )
+}
 
-$settings = [ordered]@{
-    SettingsVersion = 4         # current, or Normalize would treat it as old and reset StartFullScreen
-    Language = 'en'             # English UI, matching the English demo dashboards
-    LastSetId = $sets[0].Id
-    StartFullScreen = $true
-    CellGap = 8
-    ShowCellLabels = $true
-    AutoCheckUpdates = $false   # no update banner across the shots
+function DemoSettings([string]$lang, [string]$firstSetId) {
+    [ordered]@{
+        SettingsVersion = 4         # current, or Normalize would treat it as old and reset StartFullScreen
+        Language = $lang            # UI language matching the demo pages
+        LastSetId = $firstSetId
+        StartFullScreen = $true
+        CellGap = 8
+        ShowCellLabels = $true
+        AutoCheckUpdates = $false   # no update banner across the shots
+    }
 }
 
 $utf8 = New-Object System.Text.UTF8Encoding($false)
@@ -166,62 +195,73 @@ Write-Host "Backing up existing data: $backup" -ForegroundColor Cyan
 if (Test-Path $data) { Copy-Item $data $backup -Recurse }
 
 try {
-    if (Test-Path $data) { Remove-Item $data -Recurse -Force }
-    New-Item -ItemType Directory (Join-Path $data 'sets') -Force | Out-Null
-    [IO.File]::WriteAllText((Join-Path $data 'settings.json'), ($settings | ConvertTo-Json -Depth 5), $utf8)
-    foreach ($s in $sets) {
-        [IO.File]::WriteAllText((Join-Path $data "sets\$($s.Name).json"), ($s | ConvertTo-Json -Depth 5), $utf8)
+    foreach ($lang in $Language) {
+        $tx = $texts[$lang]
+        $script:shotDir = Join-Path $outDir $lang
+        New-Item -ItemType Directory $script:shotDir -Force | Out-Null
+
+        if (Test-Path $data) { Remove-Item $data -Recurse -Force }
+        New-Item -ItemType Directory (Join-Path $data 'sets') -Force | Out-Null
+        $sets = DemoSets $lang
+        [IO.File]::WriteAllText((Join-Path $data 'settings.json'), ((DemoSettings $lang $sets[0].Id) | ConvertTo-Json -Depth 5), $utf8)
+        foreach ($s in $sets) {
+            [IO.File]::WriteAllText((Join-Path $data "sets\$($s.Name).json"), ($s | ConvertTo-Json -Depth 5), $utf8)
+        }
+
+        Write-Host "[$lang] Starting the app..." -ForegroundColor Cyan
+        & $park
+        $proc = Start-Process $Exe -PassThru
+        $proc.WaitForInputIdle(15000) | Out-Null
+        Start-Sleep -Seconds 12     # cells start staggered; let every page render
+        $id = $proc.Id
+
+        Write-Host "[$lang] Capturing into $($script:shotDir):" -ForegroundColor Cyan
+        Shot '01-grid.png'
+
+        # Cell menu over the grid.
+        $c = CellCenter 3 2 1 0
+        [Input]::Click($c.X, $c.Y, $true); Start-Sleep -Milliseconds 900
+        Shot '02-cell-menu.png'
+        [Input]::Key(0x1B, $false); Start-Sleep -Milliseconds 500
+
+        # One cell zoomed to the whole screen. The pointer sits mid-screen so the close button stays hidden.
+        $c = CellCenter 3 2 0 0
+        [Input]::Click($c.X, $c.Y, $false); Start-Sleep -Milliseconds 400
+        [Input]::SetCursorPos($screen.Left + $screen.Width / 2, $screen.Top + $screen.Height / 2) | Out-Null
+        Start-Sleep -Seconds 3
+        Shot '03-zoomed-cell.png'
+        [Input]::Key(0x1B, $false); Start-Sleep -Seconds 2
+        & $park
+
+        # Cell settings.
+        $c = CellCenter 3 2 2 0
+        OpenMenuItem $id $c.X $c.Y $tx.CellSettingsItem
+        $dlg = FindByName $id $tx.CellSettingsTitle
+        # Cell 3 is a browser cell, so the browser kind must be the one shown. A stray focus change
+        # once left another radio picked; the dialog is cancelled afterwards, so fixing it is harmless.
+        $rb = FindByName $id $tx.BrowserRadio
+        $sel = $rb.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
+        if (-not $sel.Current.IsSelected) { Write-Host '  (kind was not Browser; corrected)' -ForegroundColor Yellow; $sel.Select() }
+        & $park; Start-Sleep -Milliseconds 800
+        Shot '04-cell-settings.png'
+        CloseWindow $dlg
+
+        # Set manager.
+        OpenMenuItem $id $c.X $c.Y $tx.ManageSetsItem
+        $dlg = FindByName $id $tx.ManageSetsTitle
+        & $park; Start-Sleep -Milliseconds 800
+        Shot '05-set-manager.png'
+        CloseWindow $dlg
+
+        # Another set, switched with Ctrl+2.
+        [Input]::Key(0x32, $true); Start-Sleep -Seconds 10
+        & $park; Start-Sleep -Milliseconds 500
+        Shot '06-another-set.png'
+
+        $proc.CloseMainWindow() | Out-Null
+        if (-not $proc.WaitForExit(8000)) { $proc.Kill() }
+        Start-Sleep -Seconds 2
     }
-
-    Write-Host 'Starting the app...' -ForegroundColor Cyan
-    & $park
-    $proc = Start-Process $Exe -PassThru
-    $proc.WaitForInputIdle(15000) | Out-Null
-    Start-Sleep -Seconds 12     # cells start staggered; let every page render
-    $id = $proc.Id
-
-    Write-Host 'Capturing:' -ForegroundColor Cyan
-    Shot '01-grid.png'
-
-    # Cell menu over the grid.
-    $c = CellCenter 3 2 1 0
-    [Input]::Click($c.X, $c.Y, $true); Start-Sleep -Milliseconds 900
-    Shot '02-cell-menu.png'
-    [Input]::Key(0x1B, $false); Start-Sleep -Milliseconds 500
-
-    # One cell zoomed to the whole screen. The pointer sits mid-screen so the close button stays hidden.
-    $c = CellCenter 3 2 0 0
-    [Input]::Click($c.X, $c.Y, $false); Start-Sleep -Milliseconds 400
-    [Input]::SetCursorPos($screen.Left + $screen.Width / 2, $screen.Top + $screen.Height / 2) | Out-Null
-    Start-Sleep -Seconds 3
-    Shot '03-zoomed-cell.png'
-    [Input]::Key(0x1B, $false); Start-Sleep -Seconds 2
-    & $park
-
-    # Cell settings.
-    $c = CellCenter 3 2 2 0
-    OpenMenuItem $id $c.X $c.Y 'Cell settings*'
-    $dlg = FindByName $id 'Cell 3 settings'
-    # Cell 3 is a browser cell, so the browser kind must be the one shown. A stray focus change
-    # once left another radio picked; the dialog is cancelled afterwards, so fixing it is harmless.
-    $rb = FindByName $id 'Browser (WebView2)'
-    $sel = $rb.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
-    if (-not $sel.Current.IsSelected) { Write-Host '  (kind was not Browser; corrected)' -ForegroundColor Yellow; $sel.Select() }
-    & $park; Start-Sleep -Milliseconds 800
-    Shot '04-cell-settings.png'
-    CloseWindow $dlg
-
-    # Set manager.
-    OpenMenuItem $id $c.X $c.Y 'Manage sets*'
-    $dlg = FindByName $id 'Manage sets'
-    & $park; Start-Sleep -Milliseconds 800
-    Shot '05-set-manager.png'
-    CloseWindow $dlg
-
-    # Another set, switched with Ctrl+2.
-    [Input]::Key(0x32, $true); Start-Sleep -Seconds 10
-    & $park; Start-Sleep -Milliseconds 500
-    Shot '06-another-set.png'
 }
 finally {
     if ($proc -and -not $proc.HasExited) {
@@ -238,4 +278,4 @@ finally {
     }
 }
 
-Write-Host "Done: $outDir" -ForegroundColor Green
+Write-Host "Done: $(($Language | ForEach-Object { Join-Path $outDir $_ }) -join ', ')" -ForegroundColor Green

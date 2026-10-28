@@ -1,0 +1,22 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>생산 현황</title>
+<link rel="stylesheet" href="../style.css"><script src="../demo.js"></script></head><body>
+<header><h1><span class="live"></span>생산 현황<small>제1공장 · A라인</small></h1><div class="clock"></div></header>
+<div class="row kpis">
+  <div class="panel kpi"><h2>금일 생산량</h2><div class="v">12,480</div><div class="d up">▲ 4.2% 전일 대비</div></div>
+  <div class="panel kpi"><h2>설비 가동률</h2><div class="v">93.6%</div><div class="d up">▲ 1.1%p</div></div>
+  <div class="panel kpi"><h2>불량률</h2><div class="v">0.42%</div><div class="d up">▼ 0.08%p</div></div>
+  <div class="panel kpi"><h2>목표 달성률</h2><div class="v">87%</div><div class="d down">▼ 계획 대비 2.3%</div></div>
+</div>
+<div class="row grow" style="grid-template-columns: 2fr 1fr;">
+  <div class="panel" style="display:flex;flex-direction:column"><h2>시간대별 생산량</h2><div id="bars" class="grow"></div></div>
+  <div class="panel"><h2>라인별 진척</h2>
+    <table><tr><th>라인</th><th style="width:55%">진척</th><th>상태</th></tr>
+      <tr><td>A-1</td><td><div class="bar"><i style="width:92%;background:var(--b)"></i></div></td><td><span class="tag ok">정상</span></td></tr>
+      <tr><td>A-2</td><td><div class="bar"><i style="width:78%;background:var(--a)"></i></div></td><td><span class="tag ok">정상</span></td></tr>
+      <tr><td>A-3</td><td><div class="bar"><i style="width:54%;background:var(--c)"></i></div></td><td><span class="tag warn">점검</span></td></tr>
+      <tr><td>A-4</td><td><div class="bar"><i style="width:88%;background:var(--b)"></i></div></td><td><span class="tag ok">정상</span></td></tr>
+      <tr><td>A-5</td><td><div class="bar"><i style="width:31%;background:var(--d)"></i></div></td><td><span class="tag bad">정지</span></td></tr>
+    </table></div>
+</div>
+<script>barChart(document.getElementById('bars'), series(7, 16, 780, 160).map(v => Math.abs(v)), ['#4c8dff', '#4c8dff', '#2ec4a6'], { h: 420 });</script>
+</body></html>

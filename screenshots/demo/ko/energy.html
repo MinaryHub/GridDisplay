@@ -1,0 +1,20 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>에너지 사용량</title>
+<link rel="stylesheet" href="../style.css"><script src="../demo.js"></script></head><body>
+<header><h1><span class="live"></span>에너지 사용량<small>전 사업장</small></h1><div class="clock"></div></header>
+<div class="row kpis">
+  <div class="panel kpi"><h2>현재 전력</h2><div class="v">2.41MW</div><div class="d">계약 대비 72%</div></div>
+  <div class="panel kpi"><h2>금일 누계</h2><div class="v">31.8MWh</div><div class="d up">▼ 2.6%</div></div>
+  <div class="panel kpi"><h2>태양광 발전</h2><div class="v">412kW</div><div class="d up">▲ 맑음</div></div>
+  <div class="panel kpi"><h2>탄소 배출</h2><div class="v">13.6t</div><div class="d up">▼ 5.1%</div></div>
+</div>
+<div class="row grow" style="grid-template-columns: 1fr 1fr;">
+  <div class="panel" style="display:flex;flex-direction:column"><h2>시간대별 전력 (오늘 vs 어제)</h2><div id="l" class="grow"></div></div>
+  <div class="panel" style="display:flex;flex-direction:column"><h2>건물별 사용량</h2><div id="b" class="grow"></div></div>
+</div>
+<script>
+lineChart(document.getElementById('l'), [
+  { data: series(41, 24, 2300, 220), color: '#ffb547', fill: true },
+  { data: series(43, 24, 2450, 200), color: '#8a96b2' }], { h: 420 });
+barChart(document.getElementById('b'), [820, 640, 910, 380, 520, 700, 450], ['#2ec4a6', '#4c8dff', '#a78bfa'], { h: 420 });
+</script>
+</body></html>

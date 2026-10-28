@@ -1,0 +1,20 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>서버 모니터링</title>
+<link rel="stylesheet" href="../style.css"><script src="../demo.js"></script></head><body>
+<header><h1><span class="live"></span>서버 모니터링<small>운영 클러스터 · 24대</small></h1><div class="clock"></div></header>
+<div class="row kpis">
+  <div class="panel kpi"><h2>평균 CPU</h2><div class="v">41%</div><div class="d up">정상 범위</div></div>
+  <div class="panel kpi"><h2>메모리</h2><div class="v">68%</div><div class="d up">정상 범위</div></div>
+  <div class="panel kpi"><h2>응답 시간</h2><div class="v">182ms</div><div class="d down">▲ 24ms</div></div>
+  <div class="panel kpi"><h2>활성 경보</h2><div class="v" style="color:var(--c)">2</div><div class="d">주의 2 · 위험 0</div></div>
+</div>
+<div class="row grow" style="grid-template-columns: 1fr 1fr;">
+  <div class="panel" style="display:flex;flex-direction:column"><h2>CPU / 메모리 (최근 1시간)</h2><div id="l1" class="grow"></div></div>
+  <div class="panel" style="display:flex;flex-direction:column"><h2>초당 요청 수</h2><div id="l2" class="grow"></div></div>
+</div>
+<script>
+lineChart(document.getElementById('l1'), [
+  { data: series(3, 60, 42, 6), color: '#4c8dff', fill: true },
+  { data: series(11, 60, 68, 3), color: '#a78bfa' }], { min: 0, max: 100, h: 420 });
+lineChart(document.getElementById('l2'), [{ data: series(19, 60, 1500, 160), color: '#2ec4a6', fill: true }], { h: 420 });
+</script>
+</body></html>
