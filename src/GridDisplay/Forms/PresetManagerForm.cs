@@ -32,7 +32,7 @@ public sealed class PresetManagerForm : Form
     public PresetManagerForm(SetStore store)
     {
         _store = store;
-        Text = "세트 관리";
+        Text = L.T("세트 관리", "Manage sets");
         StartPosition = FormStartPosition.CenterParent;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MinimizeBox = false;
@@ -51,11 +51,11 @@ public sealed class PresetManagerForm : Form
 
         Controls.AddRange(new Control[]
         {
-            Button("새로 만들기", S(264), S(12), (_, _) => AddPreset()),
-            Button("복제", S(264), S(46), (_, _) => DuplicatePreset()),
-            Button("삭제", S(264), S(80), (_, _) => DeletePreset()),
-            Button("▲ 위로", S(264), S(130), (_, _) => MovePreset(-1)),
-            Button("▼ 아래로", S(264), S(164), (_, _) => MovePreset(+1)),
+            Button(L.T("새로 만들기", "New"), S(264), S(12), (_, _) => AddPreset()),
+            Button(L.T("복제", "Duplicate"), S(264), S(46), (_, _) => DuplicatePreset()),
+            Button(L.T("삭제", "Delete"), S(264), S(80), (_, _) => DeletePreset()),
+            Button(L.T("▲ 위로", "▲ Move up"), S(264), S(130), (_, _) => MovePreset(-1)),
+            Button(L.T("▼ 아래로", "▼ Move down"), S(264), S(164), (_, _) => MovePreset(+1)),
         });
 
         // Alt+Up/Down moves the selected set without leaving the list.
@@ -66,18 +66,19 @@ public sealed class PresetManagerForm : Form
             e.Handled = e.SuppressKeyPress = true;
         };
 
-        Controls.Add(new Label { Text = "이름", Bounds = new Rectangle(S(400), S(15), S(40), S(20)) });
-        _name.Bounds = new Rectangle(S(444), S(12), S(164), S(23));
+        // Caption column wide enough for "Columns"; the Korean captions are one or two glyphs.
+        Controls.Add(new Label { Text = L.T("이름", "Name"), Bounds = new Rectangle(S(400), S(15), S(56), S(20)) });
+        _name.Bounds = new Rectangle(S(458), S(12), S(150), S(23));
         _name.TextChanged += (_, _) => ApplyEdits();
         Controls.Add(_name);
 
-        Controls.Add(new Label { Text = "열", Bounds = new Rectangle(S(400), S(49), S(40), S(20)) });
-        _cols.Bounds = new Rectangle(S(444), S(46), S(60), S(23));
+        Controls.Add(new Label { Text = L.T("열", "Columns"), Bounds = new Rectangle(S(400), S(49), S(56), S(20)) });
+        _cols.Bounds = new Rectangle(S(458), S(46), S(52), S(23));
         _cols.ValueChanged += (_, _) => ApplyEdits();
         Controls.Add(_cols);
 
-        Controls.Add(new Label { Text = "행", Bounds = new Rectangle(S(516), S(49), S(24), S(20)) });
-        _rows.Bounds = new Rectangle(S(544), S(46), S(60), S(23));
+        Controls.Add(new Label { Text = L.T("행", "Rows"), Bounds = new Rectangle(S(516), S(49), S(38), S(20)) });
+        _rows.Bounds = new Rectangle(S(556), S(46), S(52), S(23));
         _rows.ValueChanged += (_, _) => ApplyEdits();
         Controls.Add(_rows);
 
@@ -86,15 +87,15 @@ public sealed class PresetManagerForm : Form
 
         var apply = new Button
         {
-            Text = "이 세트 열기",
+            Text = L.T("이 세트 열기", "Open this set"),
             DialogResult = DialogResult.OK,
-            Bounds = new Rectangle(S(400), S(340), S(104), S(30)),
+            Bounds = new Rectangle(S(400), S(340), S(116), S(30)),
         };
         var close = new Button
         {
-            Text = "닫기",
+            Text = L.T("닫기", "Close"),
             DialogResult = DialogResult.Cancel,
-            Bounds = new Rectangle(S(512), S(340), S(96), S(30)),
+            Bounds = new Rectangle(S(524), S(340), S(84), S(30)),
         };
         Controls.Add(apply);
         Controls.Add(close);
@@ -236,7 +237,7 @@ public sealed class PresetManagerForm : Form
     {
         FlushResize();
         var p = GridPreset.CreateDefault();
-        p.Name = $"세트 {_store.Sets.Count + 1}";
+        p.Name = L.T($"세트 {_store.Sets.Count + 1}", $"Set {_store.Sets.Count + 1}");
         _store.Add(p);
         Refill(p.Id);
     }
@@ -246,7 +247,7 @@ public sealed class PresetManagerForm : Form
         FlushResize();
         var p = Selected;
         if (p is null) return;
-        var copy = p.Duplicate(p.Name + " 사본");
+        var copy = p.Duplicate(p.Name + L.T(" 사본", " copy"));
         _store.Add(copy);
         Refill(copy.Id);
     }
@@ -267,10 +268,10 @@ public sealed class PresetManagerForm : Form
         if (p is null) return;
         if (_store.Sets.Count <= 1)
         {
-            MessageBox.Show(this, "마지막 세트는 삭제할 수 없습니다.", "확인", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(this, L.T("마지막 세트는 삭제할 수 없습니다.", "The last set cannot be deleted."), L.T("확인", "GridDisplay"), MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
-        if (MessageBox.Show(this, $"'{p.Name}' 세트를 삭제할까요?", "삭제", MessageBoxButtons.YesNo, MessageBoxIcon.Question)
+        if (MessageBox.Show(this, L.T($"'{p.Name}' 세트를 삭제할까요?", $"Delete the set '{p.Name}'?"), L.T("삭제", "Delete"), MessageBoxButtons.YesNo, MessageBoxIcon.Question)
             != DialogResult.Yes) return;
 
         _store.Delete(p);

@@ -51,18 +51,20 @@ public static class UpdateInstaller
     {
         var exe = Environment.ProcessPath;
         if (exe is null || !Path.GetFileName(exe).Equals(ExeName, StringComparison.OrdinalIgnoreCase))
-            return "개발 중 실행(dotnet run)에서는 업데이트를 적용할 수 없습니다.";
+            return L.T("개발 중 실행(dotnet run)에서는 업데이트를 적용할 수 없습니다.", "Updates cannot be applied when running from a development build (dotnet run).");
 
         if (!IsWritable(InstallDirectory))
-            return $"설치 폴더에 쓸 권한이 없습니다.\n{InstallDirectory}";
+            return L.T("설치 폴더에 쓸 권한이 없습니다.", "No permission to write to the install folder.") + $"\n{InstallDirectory}";
 
         // Several walls commonly run from one install folder. The applier only waits for the
         // copy that launched it, so the others would still hold GridDisplay.dll open and the
         // update would fail halfway through. Say so before anything is downloaded.
         int siblings = SiblingInstances();
         if (siblings > 0)
-            return $"같은 폴더에서 GridDisplay가 {siblings}개 더 실행 중입니다.\n"
-                 + "업데이트하려면 나머지를 먼저 종료해 주세요.";
+            return L.T($"같은 폴더에서 GridDisplay가 {siblings}개 더 실행 중입니다.\n"
+                     + "업데이트하려면 나머지를 먼저 종료해 주세요.",
+                     $"{siblings} more copies of GridDisplay are running from the same folder.\n"
+                     + "Close the others first to update.");
 
         return null;
     }
@@ -106,7 +108,7 @@ public static class UpdateInstaller
     {
         var stagedExe = Path.Combine(stagingDirectory, ExeName);
         if (!File.Exists(stagedExe))
-            throw new FileNotFoundException($"업데이트 파일을 찾을 수 없습니다.\n{stagedExe}");
+            throw new FileNotFoundException(L.T("업데이트 파일을 찾을 수 없습니다.", "Update file not found.") + $"\n{stagedExe}");
 
         var info = new ProcessStartInfo
         {
@@ -129,8 +131,8 @@ public static class UpdateInstaller
     {
         try
         {
-            if (args.Length < 3) { Log("적용 인자가 부족합니다."); return; }
-            if (!int.TryParse(args[1], out int pid)) { Log($"잘못된 PID: {args[1]}"); return; }
+            if (args.Length < 3) { Log("Not enough arguments to apply the update."); return; }
+            if (!int.TryParse(args[1], out int pid)) { Log($"Invalid PID: {args[1]}"); return; }
 
             var target = args[2];
             var source = AppContext.BaseDirectory;
@@ -139,7 +141,7 @@ public static class UpdateInstaller
             {
                 // Still running means nothing was replaced and the user's wall is intact.
                 // Bailing out is safer than forcing the copy against a live process.
-                Log($"PID {pid} 이(가) 종료되지 않아 업데이트를 적용하지 않았습니다.");
+                Log($"PID {pid} did not exit; update not applied.");
                 return;
             }
 
@@ -153,19 +155,20 @@ public static class UpdateInstaller
                 UseShellExecute = false,
             });
 
-            Log($"업데이트 적용 완료: {source} -> {target}");
+            Log($"Update applied: {source} -> {target}");
         }
         catch (Exception ex)
         {
-            Log("업데이트 적용 실패: " + ex);
+            Log("Update apply failed: " + ex);
             // The old build is still installed and still launchable; say so rather than
             // leaving the user staring at an app that silently never came back.
             try
             {
                 MessageBox.Show(
-                    "업데이트를 적용하지 못했습니다. 이전 버전은 그대로 사용할 수 있습니다.\n\n"
-                    + ex.Message + "\n\n기록: " + LogPath,
-                    "Grid Display 업데이트", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    L.T("업데이트를 적용하지 못했습니다. 이전 버전은 그대로 사용할 수 있습니다.",
+                        "Could not apply the update. The previous version is still usable.")
+                    + "\n\n" + ex.Message + "\n\n" + L.T("기록: ", "Log: ") + LogPath,
+                    L.T("Grid Display 업데이트", "Grid Display update"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
             catch { }
         }
@@ -224,7 +227,8 @@ public static class UpdateInstaller
         {
             TryDeleteDirectory(versionDir);
             throw new InvalidDataException(
-                $"내려받은 파일이 손상되었습니다.\n기대: {expectedSha256.Trim()}\n실제: {actual}");
+                L.T($"내려받은 파일이 손상되었습니다.\n기대: {expectedSha256.Trim()}\n실제: {actual}",
+                    $"The downloaded file is corrupted.\nExpected: {expectedSha256.Trim()}\nActual: {actual}"));
         }
 
         System.IO.Compression.ZipFile.ExtractToDirectory(zipPath, filesDir, overwriteFiles: true);
@@ -233,7 +237,7 @@ public static class UpdateInstaller
         if (!File.Exists(Path.Combine(filesDir, ExeName)))
         {
             TryDeleteDirectory(versionDir);
-            throw new InvalidDataException($"업데이트 패키지에 {ExeName} 이(가) 없습니다.");
+            throw new InvalidDataException(L.T($"업데이트 패키지에 {ExeName} 이(가) 없습니다.", $"The update package does not contain {ExeName}."));
         }
 
         return filesDir;

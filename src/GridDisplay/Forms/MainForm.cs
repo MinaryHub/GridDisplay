@@ -238,7 +238,8 @@ public sealed class MainForm : Form
     {
         var c = cell.Config;
         double factor = c.FitToCell ? c.ZoomScale : c.ZoomFactor;
-        ShowBanner($"셀 {cell.Index + 1} 배율 {factor * 100:0}% · 다음에 켜도 유지됩니다 (우클릭 › 배율 원래대로)");
+        ShowBanner(L.T($"셀 {cell.Index + 1} 배율 {factor * 100:0}% · 다음에 켜도 유지됩니다 (우클릭 › 배율 원래대로)",
+                       $"Cell {cell.Index + 1} zoom {factor * 100:0}% · kept after a restart (right-click › Reset zoom)"));
     }
 
     // ------------------------------------------------------------------ layout
@@ -432,7 +433,7 @@ public sealed class MainForm : Form
         TextRenderer.DrawText(g, number, Font, new Rectangle(x, strip.Top, nw, strip.Height), LabelDimColor, flags);
         x += nw + Scaled(8);
 
-        string name = cell.Config.IsConfigured ? cell.HeaderText : "비어 있음";
+        string name = cell.Config.IsConfigured ? cell.HeaderText : L.T("비어 있음", "Empty");
         if (right > x)
             TextRenderer.DrawText(g, name, Font, new Rectangle(x, strip.Top, right - x, strip.Height),
                 cell.Config.IsConfigured ? LabelTextColor : LabelDimColor, flags);
@@ -442,11 +443,11 @@ public sealed class MainForm : Form
     {
         var c = cell.Config;
         if (c.Kind != CellKind.Browser) yield break;
-        if (c.LiveInGrid) yield return ("실시간", Color.FromArgb(240, 120, 110));
-        if (cell.HasUserZoom) yield return ($"배율 {c.ZoomScale * 100:0}%", AccentColor);
-        if (c.RefreshMinutes > 0) yield return ($"{c.RefreshMinutes}분", LabelDimColor);
-        if (c.PreventLogout) yield return ("로그아웃 방지", LabelOnColor);
-        if (c.KeepSignedIn) yield return ("로그인 유지", LabelOnColor);
+        if (c.LiveInGrid) yield return (L.T("실시간", "Live"), Color.FromArgb(240, 120, 110));
+        if (cell.HasUserZoom) yield return (L.T($"배율 {c.ZoomScale * 100:0}%", $"Zoom {c.ZoomScale * 100:0}%"), AccentColor);
+        if (c.RefreshMinutes > 0) yield return (L.T($"{c.RefreshMinutes}분", $"{c.RefreshMinutes} min"), LabelDimColor);
+        if (c.PreventLogout) yield return (L.T("로그아웃 방지", "Prevent sign-out"), LabelOnColor);
+        if (c.KeepSignedIn) yield return (L.T("로그인 유지", "Stay signed in"), LabelOnColor);
     }
 
     private void InvalidateCellFrame(int index)
@@ -759,7 +760,7 @@ public sealed class MainForm : Form
             return;
         }
         ToggleZoom(_zoomed);
-        ShowBanner("격자 보기");
+        ShowBanner(L.T("격자 보기", "Grid view"));
     }
 
     private int DragThreshold => Math.Max(SystemInformation.DragSize.Width, Scaled(6));
@@ -786,7 +787,7 @@ public sealed class MainForm : Form
         Relayout();
         Invalidate();
         UpdateTitle();
-        ShowBanner($"셀 {a + 1} ↔ {b + 1} 자리 교환");
+        ShowBanner(L.T($"셀 {a + 1} ↔ {b + 1} 자리 교환", $"Swapped cells {a + 1} ↔ {b + 1}"));
     }
 
     private void ToggleZoom(int index)
@@ -866,8 +867,8 @@ public sealed class MainForm : Form
         S.StartFullScreen = _fullScreen;
         _store.SaveSettings();
         ShowBanner(_fullScreen
-            ? "전체 화면 — 다음 실행에도 이 상태로 시작합니다"
-            : "창 모드 — 다음 실행에도 이 상태로 시작합니다");
+            ? L.T("전체 화면 — 다음 실행에도 이 상태로 시작합니다", "Full screen — the next start opens this way too")
+            : L.T("창 모드 — 다음 실행에도 이 상태로 시작합니다", "Windowed — the next start opens this way too"));
     }
 
     private void SetFullScreen(bool on)
@@ -978,7 +979,7 @@ public sealed class MainForm : Form
             _closeZoom.Region = new Region(round);
         }
         _closeZoom.Click += (_, _) => LeaveZoom();
-        _closeZoomTip.SetToolTip(_closeZoom, "격자로 돌아가기 (Esc)");
+        _closeZoomTip.SetToolTip(_closeZoom, L.T("격자로 돌아가기 (Esc)", "Back to grid (Esc)"));
         Controls.Add(_closeZoom);
 
         _closeZoomTimer.Tick += (_, _) => UpdateCloseZoom();
@@ -1029,29 +1030,30 @@ public sealed class MainForm : Form
 
         _menuHeader = new ToolStripLabel { ForeColor = LabelDimColor, Margin = new Padding(4, 4, 4, 2) };
         _menu.Items.Add(_menuHeader);
-        _menu.Items.Add("셀 설정…", null, (_, _) => EditCell(_menuCell));
-        _menu.Items.Add("새로 고침", null, (_, _) => CellAt(_menuCell)?.Reload());
-        _resetZoomItem = new ToolStripMenuItem("배율 원래대로", null, (_, _) => CellAt(_menuCell)?.ResetZoom());
+        _menu.Items.Add(L.T("셀 설정…", "Cell settings…"), null, (_, _) => EditCell(_menuCell));
+        _menu.Items.Add(L.T("새로 고침", "Reload"), null, (_, _) => CellAt(_menuCell)?.Reload());
+        _resetZoomItem = new ToolStripMenuItem(L.T("배율 원래대로", "Reset zoom"), null, (_, _) => CellAt(_menuCell)?.ResetZoom());
         _menu.Items.Add(_resetZoomItem);
-        _liveItem = new ToolStripMenuItem("격자에서도 실시간 표시", null, (_, _) => ToggleLiveInGrid(_menuCell));
+        _liveItem = new ToolStripMenuItem(L.T("격자에서도 실시간 표시", "Live in grid"), null, (_, _) => ToggleLiveInGrid(_menuCell));
         _menu.Items.Add(_liveItem);
-        _adoptUrlItem = new ToolStripMenuItem("현재 주소를 이 칸의 주소로", null, (_, _) => AdoptCurrentUrl(_menuCell));
+        _adoptUrlItem = new ToolStripMenuItem(L.T("현재 주소를 이 칸의 주소로", "Use current page as this cell's address"), null, (_, _) => AdoptCurrentUrl(_menuCell));
         _menu.Items.Add(_adoptUrlItem);
-        _menu.Items.Add("셀 다시 시작", null, (_, _) => RestartCell(_menuCell));
+        _menu.Items.Add(L.T("셀 다시 시작", "Restart cell"), null, (_, _) => RestartCell(_menuCell));
         _menu.Items.Add(new ToolStripSeparator());
         _menu.Items.Add(BuildSetMenu());
         _menu.Items.Add(BuildGridSizeMenu());
-        _menu.Items.Add("세트 관리…", null, (_, _) => ManagePresets());
-        _menu.Items.Add("현재 배치를 새 세트로 저장…", null, (_, _) => SaveAsNewPreset());
-        _labelsItem = new ToolStripMenuItem("셀 이름표 표시", null, (_, _) => ToggleCellLabels());
+        _menu.Items.Add(L.T("세트 관리…", "Manage sets…"), null, (_, _) => ManagePresets());
+        _menu.Items.Add(L.T("현재 배치를 새 세트로 저장…", "Save layout as new set…"), null, (_, _) => SaveAsNewPreset());
+        _labelsItem = new ToolStripMenuItem(L.T("셀 이름표 표시", "Show cell labels"), null, (_, _) => ToggleCellLabels());
         _menu.Items.Add(_labelsItem);
+        _menu.Items.Add(BuildLanguageMenu());
         _menu.Items.Add(new ToolStripSeparator());
-        _menu.Items.Add(new ToolStripMenuItem("전체 화면", null, (_, _) => ToggleFullScreenByUser()) { ShortcutKeyDisplayString = "F11" });
+        _menu.Items.Add(new ToolStripMenuItem(L.T("전체 화면", "Full screen"), null, (_, _) => ToggleFullScreenByUser()) { ShortcutKeyDisplayString = "F11" });
         _menu.Items.Add(BuildShortcutMenu());
-        _menu.Items.Add($"버전 및 업데이트…  (v{AppVersion.Display})", null, (_, _) => ShowUpdateDialog());
+        _menu.Items.Add(L.T($"버전 및 업데이트…  (v{AppVersion.Display})", $"Version and updates…  (v{AppVersion.Display})"), null, (_, _) => ShowUpdateDialog());
         _menu.Items.Add(new ToolStripSeparator());
-        _menu.Items.Add(new ToolStripMenuItem("셀 비우기", null, (_, _) => ClearCell(_menuCell)) { ForeColor = Color.FromArgb(240, 154, 154) });
-        _menu.Items.Add("종료", null, (_, _) => Close());
+        _menu.Items.Add(new ToolStripMenuItem(L.T("셀 비우기", "Clear cell"), null, (_, _) => ClearCell(_menuCell)) { ForeColor = Color.FromArgb(240, 154, 154) });
+        _menu.Items.Add(L.T("종료", "Exit"), null, (_, _) => Close());
 
         foreach (ToolStripItem item in _menu.Items)
             if (item is ToolStripMenuItem m && m.ForeColor == SystemColors.ControlText) m.ForeColor = LabelTextColor;
@@ -1063,7 +1065,7 @@ public sealed class MainForm : Form
     /// </summary>
     private ToolStripMenuItem BuildSetMenu()
     {
-        var item = new ToolStripMenuItem("세트 바꾸기") { ForeColor = LabelTextColor };
+        var item = new ToolStripMenuItem(L.T("세트 바꾸기", "Switch set")) { ForeColor = LabelTextColor };
         StyleDropDown(item);
         // A placeholder so the arrow shows before the first open fills it.
         item.DropDownItems.Add(new ToolStripMenuItem("…"));
@@ -1090,17 +1092,17 @@ public sealed class MainForm : Form
     /// <summary>The keys there are, for whoever has not learned them yet.</summary>
     private ToolStripMenuItem BuildShortcutMenu()
     {
-        var item = new ToolStripMenuItem("단축키") { ForeColor = LabelTextColor };
+        var item = new ToolStripMenuItem(L.T("단축키", "Shortcuts")) { ForeColor = LabelTextColor };
         StyleDropDown(item);
         foreach (var (key, what) in new[]
                  {
-                     ("클릭 · Enter", "크게 보고 바로 입력"),
-                     ("Esc", "격자로 돌아가기 · 메뉴 닫기"),
-                     ("방향키", "셀 고르기"),
-                     ("Ctrl+1~9", "세트 바꾸기"),
-                     ("Ctrl+R", "선택한 셀 새로 고침"),
-                     ("F11", "전체 화면"),
-                     ("우클릭", "이 메뉴"),
+                     (L.T("클릭 · Enter", "Click · Enter"), L.T("크게 보고 바로 입력", "Zoom in and start typing")),
+                     ("Esc", L.T("격자로 돌아가기 · 메뉴 닫기", "Back to grid · close menu")),
+                     (L.T("방향키", "Arrow keys"), L.T("셀 고르기", "Select a cell")),
+                     ("Ctrl+1~9", L.T("세트 바꾸기", "Switch set")),
+                     ("Ctrl+R", L.T("선택한 셀 새로 고침", "Reload selected cell")),
+                     ("F11", L.T("전체 화면", "Full screen")),
+                     (L.T("우클릭", "Right-click"), L.T("이 메뉴", "This menu")),
                  })
         {
             item.DropDownItems.Add(new ToolStripMenuItem(what) { ShortcutKeyDisplayString = key, ForeColor = LabelTextColor });
@@ -1114,6 +1116,46 @@ public sealed class MainForm : Form
         item.DropDown.Renderer = _menu.Renderer;
         item.DropDown.BackColor = DarkMenuColors.Background;
         if (item.DropDown is ToolStripDropDownMenu dd) { dd.ShowImageMargin = false; dd.ShowCheckMargin = true; }
+    }
+
+    /// <summary>
+    /// Automatic, Korean or English. Captions are read once as controls are built, so the choice
+    /// is saved and applies from the next start rather than switching half the UI now.
+    /// </summary>
+    private ToolStripMenuItem BuildLanguageMenu()
+    {
+        var item = new ToolStripMenuItem("언어 / Language") { ForeColor = LabelTextColor };
+        StyleDropDown(item);
+        foreach (var (code, caption) in new[]
+                 {
+                     ("", L.T("자동 (Windows 설정)", "Automatic (Windows setting)")),
+                     ("ko", "한국어"),
+                     ("en", "English"),
+                 })
+        {
+            item.DropDownItems.Add(new ToolStripMenuItem(caption, null, (_, _) => SetLanguage(code))
+            {
+                Tag = code,
+                ForeColor = LabelTextColor,
+            });
+        }
+
+        // Ticks are refreshed on open, the same as the grid-size menu.
+        item.DropDownOpening += (_, _) =>
+        {
+            string current = (S.Language ?? string.Empty).Trim().ToLowerInvariant();
+            if (current is not ("ko" or "en")) current = string.Empty;
+            foreach (ToolStripMenuItem entry in item.DropDownItems)
+                entry.Checked = (string)entry.Tag! == current;
+        };
+        return item;
+    }
+
+    private void SetLanguage(string code)
+    {
+        S.Language = code;
+        _store.SaveSettings();
+        ShowBanner(L.T("다시 시작하면 적용됩니다", "Takes effect after a restart"));
     }
 
     private void ToggleCellLabels()
@@ -1155,7 +1197,7 @@ public sealed class MainForm : Form
     /// </summary>
     private ToolStripMenuItem BuildGridSizeMenu()
     {
-        var item = new ToolStripMenuItem("격자 크기");
+        var item = new ToolStripMenuItem(L.T("격자 크기", "Grid size"));
         foreach (var (cols, rows) in new[] { (1, 1), (2, 1), (2, 2), (3, 2), (3, 3), (4, 2), (4, 3), (4, 4) })
             item.DropDownItems.Add($"{cols} × {rows}", null, (_, _) => SetGridSize(cols, rows));
 
@@ -1184,12 +1226,12 @@ public sealed class MainForm : Form
         _liveItem.Available = menuHost?.Config.Kind == CellKind.Browser;
         _liveItem.Checked = menuHost?.Config.LiveInGrid == true;
         var host = CellAt(index);
-        string name = host is null ? string.Empty : host.Config.IsConfigured ? host.HeaderText : "비어 있음";
+        string name = host is null ? string.Empty : host.Config.IsConfigured ? host.HeaderText : L.T("비어 있음", "Empty");
         if (name.Length > 40) name = name[..40] + "…";
-        _menuHeader.Text = $"셀 {index + 1} · {name}";
+        _menuHeader.Text = L.T($"셀 {index + 1} · {name}", $"Cell {index + 1} · {name}");
         _resetZoomItem.Available = host?.HasUserZoom == true;
         if (host?.HasUserZoom == true)
-            _resetZoomItem.Text = $"배율 원래대로  (현재 {host.Config.ZoomScale * 100:0}%)";
+            _resetZoomItem.Text = L.T($"배율 원래대로  (현재 {host.Config.ZoomScale * 100:0}%)", $"Reset zoom  (now {host.Config.ZoomScale * 100:0}%)");
         _menu.Show(screen);
     }
 
@@ -1211,7 +1253,7 @@ public sealed class MainForm : Form
         if (!drifted) return;
 
         var shown = cell!.LastUrl.Length > 60 ? cell.LastUrl[..60] + "…" : cell.LastUrl;
-        _adoptUrlItem.Text = $"현재 주소를 이 칸의 주소로  ({shown})";
+        _adoptUrlItem.Text = L.T($"현재 주소를 이 칸의 주소로  ({shown})", $"Use current page as this cell's address  ({shown})");
     }
 
     /// <summary>Make where the cell is now the address it is configured with.</summary>
@@ -1225,7 +1267,7 @@ public sealed class MainForm : Form
         _store.SaveSet(_preset);
         Invalidate();
         UpdateTitle();
-        ShowBanner($"셀 {index + 1}의 주소를 현재 화면으로 바꿨습니다");
+        ShowBanner(L.T($"셀 {index + 1}의 주소를 현재 화면으로 바꿨습니다", $"Cell {index + 1} now uses the current page as its address"));
     }
 
     private async void EditCell(int index)
@@ -1263,8 +1305,8 @@ public sealed class MainForm : Form
         ApplyPresentation();
         InvalidateCellFrame(index);
         ShowBanner(cell.Config.LiveInGrid
-            ? $"셀 {index + 1} 격자에서도 실시간으로 표시"
-            : $"셀 {index + 1} 격자에서는 정지 화면으로 표시");
+            ? L.T($"셀 {index + 1} 격자에서도 실시간으로 표시", $"Cell {index + 1} is live in the grid")
+            : L.T($"셀 {index + 1} 격자에서는 정지 화면으로 표시", $"Cell {index + 1} shows a still in the grid"));
     }
 
     private async void RestartCell(int index)
@@ -1302,15 +1344,16 @@ public sealed class MainForm : Form
         int dropped = ConfiguredCellsOutside(cols, rows);
         if (dropped > 0 && MessageBox.Show(
                 this,
-                $"격자를 {cols}×{rows}로 줄이면 설정된 셀 {dropped}개가 삭제됩니다.\n계속할까요?",
-                "격자 크기", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
+                L.T($"격자를 {cols}×{rows}로 줄이면 설정된 셀 {dropped}개가 삭제됩니다.\n계속할까요?",
+                    $"Shrinking the grid to {cols}×{rows} deletes {dropped} configured cell(s).\nContinue?"),
+                L.T("격자 크기", "Grid size"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
         {
             return;
         }
 
         _preset.Resize(cols, rows);
         _store.SaveSet(_preset);
-        ShowBanner($"격자 {cols}×{rows}");
+        ShowBanner(L.T($"격자 {cols}×{rows}", $"Grid {cols}×{rows}"));
         _ = LoadPresetAsync(_preset);
     }
 
@@ -1364,16 +1407,16 @@ public sealed class MainForm : Form
 
     private void SaveAsNewPreset()
     {
-        var name = Prompt("새 세트 이름", _preset.Name + " 사본");
+        var name = Prompt(L.T("새 세트 이름", "New set name"), _preset.Name + L.T(" 사본", " copy"));
         if (string.IsNullOrWhiteSpace(name)) return;
 
         var copy = _store.Add(_preset.Duplicate(name.Trim()));
-        ShowBanner($"'{copy.Name}' 세트로 저장했습니다");
+        ShowBanner(L.T($"'{copy.Name}' 세트로 저장했습니다", $"Saved as set '{copy.Name}'"));
     }
 
     private void UpdateTitle()
     {
-        string mode = _interactive ? "입력" : _zoomed >= 0 ? "확대" : "격자";
+        string mode = _interactive ? L.T("입력", "input") : _zoomed >= 0 ? L.T("확대", "zoom") : L.T("격자", "grid");
         string cell = _zoomed >= 0 && _zoomed < _cells.Count ? $" · {_cells[_zoomed].HeaderText}" : string.Empty;
         // Version stays in the title: a wall is usually read over somebody's shoulder, and
         // this is the one place it shows without opening a dialog.
@@ -1395,8 +1438,8 @@ public sealed class MainForm : Form
             Font = new Font("Segoe UI", 9f),
         };
         var box = new TextBox { Text = initial, Bounds = new Rectangle(12, 16, 336, 23) };
-        var ok = new Button { Text = "확인", DialogResult = DialogResult.OK, Bounds = new Rectangle(176, 62, 84, 30) };
-        var cancel = new Button { Text = "취소", DialogResult = DialogResult.Cancel, Bounds = new Rectangle(264, 62, 84, 30) };
+        var ok = new Button { Text = L.T("확인", "OK"), DialogResult = DialogResult.OK, Bounds = new Rectangle(176, 62, 84, 30) };
+        var cancel = new Button { Text = L.T("취소", "Cancel"), DialogResult = DialogResult.Cancel, Bounds = new Rectangle(264, 62, 84, 30) };
         form.Controls.AddRange(new Control[] { box, ok, cancel });
         form.AcceptButton = ok;
         form.CancelButton = cancel;
@@ -1443,7 +1486,7 @@ public sealed class MainForm : Form
             if (now - _lastHealthUtc >= HealthMonitor.Interval)
             {
                 _lastHealthUtc = now;
-                HealthMonitor.Sample($"세트 '{_preset?.Name}' · 칸 {_cells.Count}개" +
+                HealthMonitor.Sample($"set '{_preset?.Name}' · {_cells.Count} cells" +
                     string.Empty);
             }
 
@@ -1457,7 +1500,7 @@ public sealed class MainForm : Form
         };
         _maintenanceTimer.Start();
 
-        HealthMonitor.Sample("기동");
+        HealthMonitor.Sample("startup");
     }
 
     /// <summary>
@@ -1484,7 +1527,7 @@ public sealed class MainForm : Form
             catch { return; }
         }
 
-        HealthMonitor.Sample("브라우저 칸 재적재 완료");
+        HealthMonitor.Sample("browser cells recycled");
     }
 
     // ------------------------------------------------------------------ updates
@@ -1513,7 +1556,7 @@ public sealed class MainForm : Form
             var result = await _updates.CheckAsync().ConfigureAwait(true);
             if (_closing) return;
             if (result.Status is UpdateStatus.UpToDate or UpdateStatus.Available) _store.SaveSettings();
-            if (result.HasUpdate) ShowBanner($"{result.Message} 우클릭 메뉴 › 버전 및 업데이트");
+            if (result.HasUpdate) ShowBanner(L.T($"{result.Message} 우클릭 메뉴 › 버전 및 업데이트", $"{result.Message} Right-click menu › Version and updates"));
         }
         catch
         {

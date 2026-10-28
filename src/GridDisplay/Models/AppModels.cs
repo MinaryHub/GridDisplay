@@ -1,3 +1,5 @@
+using GridDisplay.Services;
+
 namespace GridDisplay.Models;
 
 public enum CellKind
@@ -120,7 +122,7 @@ public sealed class CellConfig
                 CellKind.Program => string.IsNullOrWhiteSpace(ExecutablePath)
                     ? "Program"
                     : Path.GetFileNameWithoutExtension(ExecutablePath),
-                _ => "비어 있음",
+                _ => L.T("비어 있음", "Empty"),
             };
         }
     }
@@ -141,7 +143,7 @@ public sealed class GridPreset
     private const int CurrentSchemaVersion = 1;
 
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
-    public string Name { get; set; } = "새 세트";
+    public string Name { get; set; } = L.T("새 세트", "New set");
     public int Columns { get; set; } = 3;
     public int Rows { get; set; } = 2;
     public List<CellConfig> Cells { get; set; } = new();
@@ -220,7 +222,7 @@ public sealed class GridPreset
 
     public static GridPreset CreateDefault()
     {
-        var p = new GridPreset { Name = "기본 세트", Columns = 3, Rows = 2 };
+        var p = new GridPreset { Name = L.T("기본 세트", "Default set"), Columns = 3, Rows = 2 };
         p.Normalize();
         return p;
     }
@@ -247,6 +249,12 @@ public class AppState
     /// a wall that runs several passes --set to each one instead.
     /// </summary>
     public string LastSetId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// UI language: "ko", "en", or empty to follow Windows. Read once at startup by
+    /// <see cref="Services.L.UseSavedSetting"/>, so a change applies on the next start.
+    /// </summary>
+    public string Language { get; set; } = string.Empty;
 
     /// <summary>
     /// Occupy the whole monitor with no chrome at startup. Off by default so a first run opens

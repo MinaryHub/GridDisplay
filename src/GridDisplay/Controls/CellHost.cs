@@ -151,7 +151,7 @@ public sealed class CellHost : Panel
             // Not now: leave the timer running and take the next slot instead of skipping a
             // whole period, so a cell watched for an hour still refreshes when it is let go.
             if (RefreshAllowed is not null && !RefreshAllowed()) return;
-            Services.HealthMonitor.Event($"셀 {Index + 1} 정기 새로 고침 · {Describe()}");
+            Services.HealthMonitor.Event($"Cell {Index + 1} scheduled reload · {Describe()}");
             Reload();
         };
 
@@ -163,11 +163,11 @@ public sealed class CellHost : Panel
             {
                 StatusText = string.Empty;
                 _web.CoreWebView2.Reload();
-                Services.HealthMonitor.Event($"셀 {Index + 1} 다시 불러옴 ({_recoverAttempts}번째)");
+                Services.HealthMonitor.Event($"Cell {Index + 1} reloaded (attempt {_recoverAttempts})");
             }
             catch
             {
-                StatusText = "화면을 다시 불러오지 못했습니다.";
+                StatusText = L.T("화면을 다시 불러오지 못했습니다.", "Could not reload the page.");
                 _placeholder.BringToFront();
             }
         };
@@ -190,7 +190,9 @@ public sealed class CellHost : Panel
 
     public CellConfig Config { get; private set; }
 
-    private string EmptyText => $"{Index + 1}\n\n＋ 이 칸에 화면 추가\n클릭하여 웹 주소나 프로그램을 넣을 수 있습니다";
+    private string EmptyText => $"{Index + 1}\n\n" + L.T(
+        "＋ 이 칸에 화면 추가\n클릭하여 웹 주소나 프로그램을 넣을 수 있습니다",
+        "＋ Add content to this cell\nClick to add a web address or a program");
 
     /// <summary>Raised when the hosted content changes something worth persisting (URL, title).</summary>
     public event Action<CellHost>? StateChanged;
@@ -230,12 +232,12 @@ public sealed class CellHost : Panel
         switch (config.Kind)
         {
             case CellKind.Browser:
-                StatusText = "브라우저 준비 중…";
+                StatusText = L.T("브라우저 준비 중…", "Preparing browser…");
                 await StartBrowserAsync(config, ct).ConfigureAwait(true);
                 break;
 
             case CellKind.Program:
-                StatusText = "프로그램 시작 중…";
+                StatusText = L.T("프로그램 시작 중…", "Starting program…");
                 await StartProgramAsync(config, ct).ConfigureAwait(true);
                 break;
 
@@ -286,8 +288,10 @@ public sealed class CellHost : Panel
         }
         catch (Exception ex)
         {
-            StatusText = "WebView2 런타임을 초기화하지 못했습니다.\n" +
-                         "Microsoft Edge WebView2 Runtime을 설치하세요.\n\n" + ex.Message;
+            StatusText = L.T("WebView2 런타임을 초기화하지 못했습니다.\n" +
+                             "Microsoft Edge WebView2 Runtime을 설치하세요.",
+                             "Could not initialize the WebView2 runtime.\n" +
+                             "Install the Microsoft Edge WebView2 Runtime.") + "\n\n" + ex.Message;
             return;
         }
 
@@ -370,7 +374,7 @@ public sealed class CellHost : Panel
         host.BringToFront();
         host.ChildLost += _ =>
         {
-            StatusText = "프로그램 창이 종료되었습니다.\n우클릭 → 다시 시작";
+            StatusText = L.T("프로그램 창이 종료되었습니다.\n우클릭 → 다시 시작", "The program window has closed.\nRight-click → Restart cell");
             _placeholder.BringToFront();
         };
 
@@ -555,11 +559,11 @@ public sealed class CellHost : Panel
         // Logged before anything else: a cell that recovers leaves no trace on screen, so
         // without this line "it died twice last night" is unanswerable.
         Services.HealthMonitor.Event(
-            $"셀 {Index + 1} 프로세스 종료 ({kind}) · {Describe()}");
+            $"Cell {Index + 1} process exited ({kind}) · {Describe()}");
 
         if (!renderer)
         {
-            StatusText = $"브라우저 프로세스 오류: {kind}";
+            StatusText = L.T($"브라우저 프로세스 오류: {kind}", $"Browser process error: {kind}");
             _placeholder.BringToFront();
             return;
         }
@@ -572,14 +576,16 @@ public sealed class CellHost : Panel
         const int maxAttempts = 5;
         if (_recoverAttempts > maxAttempts)
         {
-            StatusText = $"화면을 되살리지 못했습니다 ({kind}). 셀 다시 시작을 눌러 주세요.";
+            StatusText = L.T($"화면을 되살리지 못했습니다 ({kind}). 셀 다시 시작을 눌러 주세요.",
+                $"Could not recover the page ({kind}). Choose Restart cell.");
             _placeholder.BringToFront();
             return;
         }
 
         // 5s, 10s, 20s, 40s, 80s — long enough that a page failing on load cannot spin.
         int delay = 5000 * (int)Math.Pow(2, _recoverAttempts - 1);
-        StatusText = $"화면이 종료되어 {delay / 1000}초 뒤 다시 불러옵니다… ({_recoverAttempts}/{maxAttempts})";
+        StatusText = L.T($"화면이 종료되어 {delay / 1000}초 뒤 다시 불러옵니다… ({_recoverAttempts}/{maxAttempts})",
+            $"The page stopped. Reloading in {delay / 1000}s… ({_recoverAttempts}/{maxAttempts})");
         _placeholder.BringToFront();
 
         _recoverTimer.Stop();
@@ -617,7 +623,7 @@ public sealed class CellHost : Panel
             if (_returnTo is null && !userInitiated && !SameAddress(_goodUrl, url))
             {
                 _returnTo = _goodUrl;
-                Services.HealthMonitor.Event($"셀 {Index + 1} 로그인 화면으로 이동됨 · 로그인 후 복귀 예정");
+                Services.HealthMonitor.Event($"Cell {Index + 1} sent to a sign-in page · will return after sign-in");
             }
             return;
         }
@@ -627,7 +633,7 @@ public sealed class CellHost : Panel
             _returnTo = null;
             if (!SameAddress(target, url))
             {
-                Services.HealthMonitor.Event($"셀 {Index + 1} 로그인 완료 · 원래 화면으로 복귀");
+                Services.HealthMonitor.Event($"Cell {Index + 1} signed in · returning to the original page");
                 Navigate(target);
                 return;
             }

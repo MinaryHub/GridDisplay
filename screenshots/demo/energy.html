@@ -1,0 +1,20 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Energy usage</title>
+<link rel="stylesheet" href="style.css"><script src="demo.js"></script></head><body>
+<header><h1><span class="live"></span>Energy usage<small>All sites</small></h1><div class="clock"></div></header>
+<div class="row kpis">
+  <div class="panel kpi"><h2>Current load</h2><div class="v">2.41MW</div><div class="d">72% of contracted</div></div>
+  <div class="panel kpi"><h2>Today so far</h2><div class="v">31.8MWh</div><div class="d up">▼ 2.6%</div></div>
+  <div class="panel kpi"><h2>Solar output</h2><div class="v">412kW</div><div class="d up">▲ Clear skies</div></div>
+  <div class="panel kpi"><h2>CO₂ emissions</h2><div class="v">13.6t</div><div class="d up">▼ 5.1%</div></div>
+</div>
+<div class="row grow" style="grid-template-columns: 1fr 1fr;">
+  <div class="panel" style="display:flex;flex-direction:column"><h2>Hourly load (today vs yesterday)</h2><div id="l" class="grow"></div></div>
+  <div class="panel" style="display:flex;flex-direction:column"><h2>Usage by building</h2><div id="b" class="grow"></div></div>
+</div>
+<script>
+lineChart(document.getElementById('l'), [
+  { data: series(41, 24, 2300, 220), color: '#ffb547', fill: true },
+  { data: series(43, 24, 2450, 200), color: '#8a96b2' }], { h: 420 });
+barChart(document.getElementById('b'), [820, 640, 910, 380, 520, 700, 450], ['#2ec4a6', '#4c8dff', '#a78bfa'], { h: 420 });
+</script>
+</body></html>

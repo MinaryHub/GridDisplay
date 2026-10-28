@@ -44,7 +44,7 @@ function Events($log, $ids, $label, $provider) {
         if ($ids) { $filter['Id'] = $ids }
         if ($provider) { $filter['ProviderName'] = $provider }
         $found = Get-WinEvent -FilterHashtable $filter -ErrorAction Stop
-        if (-not $found) { Add '  (해당 기간에 없음)'; return }
+        if (-not $found) { Add '  (none in this period)'; return }
         foreach ($e in $found | Sort-Object TimeCreated) {
             Add ("  {0}  [{1}] {2}" -f $e.TimeCreated, $e.Id, $e.ProviderName)
 
@@ -56,11 +56,11 @@ function Events($log, $ids, $label, $provider) {
                     $get = { param($n) ($x.Event.EventData.Data | Where-Object { $_.Name -eq $n }).'#text' }
                     $code = & $get 'BugcheckCode'
                     Add ("      BugcheckCode = {0}{1}" -f $code,
-                        $(if ($code -eq '0') { '  → 크래시 아님. 그대로 얼어붙었거나 전원이 끊긴 경우' }
-                          else { '  → 커널 크래시. 10번 항목의 덤프를 분석해야 합니다' }))
-                    Add ("      PowerButtonTimestamp = {0}   전원 버튼으로 껐는지 여부" -f (& $get 'PowerButtonTimestamp'))
+                        $(if ($code -eq '0') { '  -> not a crash: the machine froze in place or lost power' }
+                          else { '  -> kernel crash: analyse the dump listed in section 12' }))
+                    Add ("      PowerButtonTimestamp = {0}   whether it was switched off with the power button" -f (& $get 'PowerButtonTimestamp'))
                 }
-                catch { Add '      (세부 값을 읽지 못했습니다)' }
+                catch { Add '      (could not read the details)' }
             }
 
             foreach ($l in ($e.Message -split "`n" | Select-Object -First 3)) {
@@ -68,58 +68,58 @@ function Events($log, $ids, $label, $provider) {
             }
         }
     }
-    catch { Add '  (해당 기간에 없음)' }
+    catch { Add '  (none in this period)' }
 }
 
-Add "Grid Display 멈춤 보고서"
-Add "생성: $(Get-Date)   대상 기간: 최근 $HoursBack 시간 (>= $since)"
-Add "컴퓨터: $env:COMPUTERNAME   사용자: $env:USERNAME"
+Add "Grid Display freeze report"
+Add "Created: $(Get-Date)   Period: last $HoursBack hours (>= $since)"
+Add "Computer: $env:COMPUTERNAME   User: $env:USERNAME"
 
-Section '1. 시스템 개요'
+Section '1. System overview'
 $os = Get-CimInstance Win32_OperatingSystem
 $cs = Get-CimInstance Win32_ComputerSystem
-Add "  OS        : $($os.Caption) $($os.Version)"
-Add "  마지막 부팅 : $($os.LastBootUpTime)"
-Add "  물리 메모리 : $([math]::Round($cs.TotalPhysicalMemory / 1GB, 1)) GB"
-Add "  현재 여유  : $([math]::Round($os.FreePhysicalMemory / 1MB, 1)) GB"
+Add "  OS            : $($os.Caption) $($os.Version)"
+Add "  Last boot     : $($os.LastBootUpTime)"
+Add "  Physical RAM  : $([math]::Round($cs.TotalPhysicalMemory / 1GB, 1)) GB"
+Add "  Free now      : $([math]::Round($os.FreePhysicalMemory / 1MB, 1)) GB"
 foreach ($pf in Get-CimInstance Win32_PageFileUsage -ErrorAction SilentlyContinue) {
-    Add "  페이지 파일 : $($pf.Name)  할당 $($pf.AllocatedBaseSize) MB  최대사용 $($pf.PeakUsage) MB"
+    Add "  Page file     : $($pf.Name)  allocated $($pf.AllocatedBaseSize) MB  peak use $($pf.PeakUsage) MB"
 }
 
-Section '2. 그래픽 드라이버'
+Section '2. Graphics driver'
 foreach ($g in Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue) {
     Add "  $($g.Name)"
-    Add "      드라이버 $($g.DriverVersion)  ($($g.DriverDate))"
+    Add "      driver $($g.DriverVersion)  ($($g.DriverDate))"
 }
 $tdr = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers' -ErrorAction SilentlyContinue
-Add "  TdrDelay  : $(if ($tdr.TdrDelay) { $tdr.TdrDelay } else { '기본값(2초)' })"
-Add "  TdrLevel  : $(if ($null -ne $tdr.TdrLevel) { $tdr.TdrLevel } else { '기본값(3=복구)' })"
+Add "  TdrDelay  : $(if ($tdr.TdrDelay) { $tdr.TdrDelay } else { 'default (2 s)' })"
+Add "  TdrLevel  : $(if ($null -ne $tdr.TdrLevel) { $tdr.TdrLevel } else { 'default (3 = recover)' })"
 
-Section '3. 저장장치 상태  ← I/O 오류가 보였다면 여기부터'
+Section '3. Storage health  <- start here if I/O errors were seen'
 foreach ($d in Get-PhysicalDisk -ErrorAction SilentlyContinue) {
     Add ("  [{0}] {1}" -f $d.DeviceId, $d.FriendlyName)
-    Add ("      일련번호 {0}" -f $d.SerialNumber)
-    Add ("      상태 {0} / {1}   버스 {2}   크기 {3} GB" -f $d.HealthStatus, $d.OperationalStatus, $d.BusType,
+    Add ("      serial {0}" -f $d.SerialNumber)
+    Add ("      status {0} / {1}   bus {2}   size {3} GB" -f $d.HealthStatus, $d.OperationalStatus, $d.BusType,
         [math]::Round($d.Size / 1GB, 0))
     # SMART-ish counters. A disk can report Healthy and still be failing reads, so the raw
     # error counts matter more than the summary word next to them.
     $rc = $d | Get-StorageReliabilityCounter -ErrorAction SilentlyContinue
     if ($rc) {
-        Add ("      읽기오류(교정) {0}  읽기오류(치명) {1}  쓰기오류(교정) {2}  쓰기오류(치명) {3}" -f
+        Add ("      read errors (corrected) {0}  read errors (uncorrected) {1}  write errors (corrected) {2}  write errors (uncorrected) {3}" -f
             $rc.ReadErrorsCorrected, $rc.ReadErrorsUncorrected, $rc.WriteErrorsCorrected, $rc.WriteErrorsUncorrected)
-        Add ("      마모도 {0}%  온도 {1}C  가동시간 {2}시간" -f $rc.Wear, $rc.Temperature, $rc.PowerOnHours)
+        Add ("      wear {0}%  temperature {1}C  power-on {2} h" -f $rc.Wear, $rc.Temperature, $rc.PowerOnHours)
     }
 }
 foreach ($v in Get-Volume -ErrorAction SilentlyContinue | Where-Object DriveLetter) {
-    Add ("  {0}: {1}  여유 {2} GB / {3} GB   상태 {4}" -f $v.DriveLetter, $v.FileSystemLabel,
+    Add ("  {0}: {1}  free {2} GB / {3} GB   status {4}" -f $v.DriveLetter, $v.FileSystemLabel,
         [math]::Round($v.SizeRemaining / 1GB, 1), [math]::Round($v.Size / 1GB, 1), $v.HealthStatus)
 }
 # Which disk holds the pagefile decides whether a storage stall freezes the whole machine.
 foreach ($pf in Get-CimInstance Win32_PageFileUsage -ErrorAction SilentlyContinue) {
-    Add ("  페이지 파일 위치: {0}  ← 이 디스크가 멎으면 시스템 전체가 멈춥니다" -f $pf.Name)
+    Add ("  Page file on: {0}  <- if this disk stalls, the whole system stalls" -f $pf.Name)
 }
 
-Section '4. Grid Display 설치 상태'
+Section '4. Grid Display installation'
 $installs = @()
 foreach ($root in @($env:LOCALAPPDATA, $env:ProgramFiles, ${env:ProgramFiles(x86)})) {
     if (-not $root) { continue }
@@ -130,9 +130,9 @@ foreach ($root in @($env:LOCALAPPDATA, $env:ProgramFiles, ${env:ProgramFiles(x86
 }
 if ($installs) {
     foreach ($f in ($installs | Select-Object -Unique)) {
-        Add "  $f  (버전 $((Get-Item $f).VersionInfo.FileVersion))"
+        Add "  $f  (version $((Get-Item $f).VersionInfo.FileVersion))"
     }
-} else { Add '  설치 폴더를 찾지 못했습니다 (MSIX 이거나 다른 위치)' }
+} else { Add '  No install folder found (MSIX, or installed elsewhere)' }
 $pkg = Get-AppxPackage -Name '*GridDisplay*' -ErrorAction SilentlyContinue
 if ($pkg) { foreach ($p2 in $pkg) { Add "  MSIX: $($p2.Name) $($p2.Version)" } }
 foreach ($dir in @((Join-Path $env:LOCALAPPDATA 'GridDisplay'), (Join-Path $env:APPDATA 'GridDisplay'))) {
@@ -142,33 +142,33 @@ foreach ($dir in @((Join-Path $env:LOCALAPPDATA 'GridDisplay'), (Join-Path $env:
     }
 }
 
-Section '5. 앱이 남긴 기록 (있는 경우)'
+Section '5. Logs written by the app (if any)'
 $logs = Get-ChildItem (Join-Path $env:LOCALAPPDATA 'GridDisplay') -Recurse -Include 'health.log', 'input-hook.log' -ErrorAction SilentlyContinue
 if (-not $logs) {
-    Add '  없음 — 진단 기록이 들어간 버전이 아직 배포되지 않았습니다.'
+    Add '  None - no version with diagnostic logging has been deployed here yet.'
 } else {
     foreach ($l in $logs) {
-        Add "  --- $($l.FullName) (마지막 40줄) ---"
+        Add "  --- $($l.FullName) (last 40 lines) ---"
         foreach ($line in (Get-Content $l.FullName -Tail 40 -ErrorAction SilentlyContinue)) { Add "      $line" }
     }
 }
 
-# 아래 네 가지가 원인을 갈라놓는 핵심입니다.
-Events 'System' @(41, 6008, 1074, 1076) '6. 비정상 종료 / 강제 재시작  ← BugcheckCode 가 0 이 아니면 드라이버 크래시'
+# The sections below are the ones that tell the causes apart.
+Events 'System' @(41, 6008, 1074, 1076) '6. Unexpected shutdown / forced restart  <- a non-zero BugcheckCode means a driver crash'
 # By provider, not by number: 117 and 141 are also used by the print spooler and others, and a
 # section full of unrelated lines hides the one line that matters.
-Events 'System' $null '7. 그래픽 드라이버 응답 없음 (TDR)  ← 전체 프리징의 가장 흔한 원인' @(
+Events 'System' $null '7. Graphics driver not responding (TDR)  <- the most common cause of a full freeze' @(
     'Display', 'Microsoft-Windows-DXGKrnl', 'Microsoft-Windows-LiveKernelEvent',
     'nvlddmkm', 'amdkmdag', 'amdwddmg', 'igfxn', 'igfx')
-Events 'System' @(2004, 2013, 333, 49, 26) '8. 메모리 / 디스크 고갈'
-Events 'System' $null '9. 하드웨어 오류 (WHEA)' 'Microsoft-Windows-WHEA-Logger'
-Events 'Application' @(1000, 1001, 1002) '10. 응용 프로그램 크래시 / 응답 없음'
+Events 'System' @(2004, 2013, 333, 49, 26) '8. Memory / disk exhaustion'
+Events 'System' $null '9. Hardware errors (WHEA)' 'Microsoft-Windows-WHEA-Logger'
+Events 'Application' @(1000, 1001, 1002) '10. Application crashes / hangs'
 
-Events 'System' $null '11. 저장장치 오류  ← "I/O on ... has failed" 가 나오는 곳' @(
+Events 'System' $null '11. Storage errors  <- where "I/O on ... has failed" shows up' @(
     'Disk', 'disk', 'storahci', 'stornvme', 'iaStorAC', 'iaStorA', 'Microsoft-Windows-Ntfs',
     'volmgr', 'partmgr', 'Microsoft-Windows-DiskDiagnosticDataCollector')
 
-Section '12. 메모리 덤프'
+Section '12. Memory dumps'
 foreach ($d in @("$env:SystemRoot\MEMORY.DMP", "$env:SystemRoot\Minidump")) {
     if (Test-Path $d) {
         Get-ChildItem $d -ErrorAction SilentlyContinue | Select-Object -First 5 | ForEach-Object {
@@ -177,10 +177,10 @@ foreach ($d in @("$env:SystemRoot\MEMORY.DMP", "$env:SystemRoot\Minidump")) {
     }
 }
 if (-not (Test-Path "$env:SystemRoot\MEMORY.DMP") -and -not (Test-Path "$env:SystemRoot\Minidump")) {
-    Add '  덤프 없음 — 커널이 멈춘 것이 아니라 그대로 얼어붙었을 가능성이 큽니다.'
+    Add '  No dumps - the kernel most likely did not crash; the machine froze in place.'
 }
 
 Set-Content -Path $OutputPath -Value $lines -Encoding utf8
 Write-Host ""
-Write-Host "보고서 저장: $OutputPath" -ForegroundColor Green
-Write-Host "이 파일을 그대로 보내 주세요. 개인 문서 내용은 들어가지 않습니다." -ForegroundColor Gray
+Write-Host "Report saved: $OutputPath" -ForegroundColor Green
+Write-Host "Please send this file as is. It contains no personal document content." -ForegroundColor Gray

@@ -1,0 +1,20 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Server monitoring</title>
+<link rel="stylesheet" href="style.css"><script src="demo.js"></script></head><body>
+<header><h1><span class="live"></span>Server monitoring<small>Production cluster · 24 nodes</small></h1><div class="clock"></div></header>
+<div class="row kpis">
+  <div class="panel kpi"><h2>Avg. CPU</h2><div class="v">41%</div><div class="d up">Within range</div></div>
+  <div class="panel kpi"><h2>Memory</h2><div class="v">68%</div><div class="d up">Within range</div></div>
+  <div class="panel kpi"><h2>Response time</h2><div class="v">182ms</div><div class="d down">▲ 24ms</div></div>
+  <div class="panel kpi"><h2>Active alerts</h2><div class="v" style="color:var(--c)">2</div><div class="d">2 warning · 0 critical</div></div>
+</div>
+<div class="row grow" style="grid-template-columns: 1fr 1fr;">
+  <div class="panel" style="display:flex;flex-direction:column"><h2>CPU / memory (last hour)</h2><div id="l1" class="grow"></div></div>
+  <div class="panel" style="display:flex;flex-direction:column"><h2>Requests per second</h2><div id="l2" class="grow"></div></div>
+</div>
+<script>
+lineChart(document.getElementById('l1'), [
+  { data: series(3, 60, 42, 6), color: '#4c8dff', fill: true },
+  { data: series(11, 60, 68, 3), color: '#a78bfa' }], { min: 0, max: 100, h: 420 });
+lineChart(document.getElementById('l2'), [{ data: series(19, 60, 1500, 160), color: '#2ec4a6', fill: true }], { h: 420 });
+</script>
+</body></html>

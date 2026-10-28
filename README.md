@@ -1,131 +1,158 @@
+[한국어](README.ko.md)
+
 # Grid Display
 
-여러 개의 브라우저와 프로그램을 하나의 모니터에 격자로 띄워 두는 Windows용 디스플레이 월 프로그램입니다.
+A display-wall app for Windows that tiles several browsers and programs into a grid on a single
+monitor.
 
-- **격자 배치** — 기본 3열 × 2행. 1×1부터 12×12까지 지정할 수 있습니다.
-- **칸마다 다른 내용** — 브라우저(WebView2 내장) 또는 임의의 Windows 프로그램.
-- **칸 안에 갇힌 창** — 프로그램 창은 자식 창으로 편입되므로 최대화·전체보기를 해도 칸을 벗어나지 못합니다.
-- **클릭하면 확대 + 바로 입력** — 칸을 클릭하면 모니터 전체를 채우고, 그때부터 키보드·마우스가 해당 앱으로 전달됩니다. 화면 위쪽에 주황색 띠가 계속 떠 있어 지금 입력 중인 것을 바로 알 수 있습니다. `Esc`를 누르면 격자로 돌아옵니다.
-- **기억과 복원** — 각 칸의 프로그램과 브라우저 주소를 계속 기억하며, 다시 실행하면 그 조합으로 복원됩니다.
-- **세트** — 여러 조합을 이름으로 저장하고 `Ctrl+1`~`Ctrl+9`로 즉시 전환합니다.
+- **Grid layout** — 3 columns × 2 rows by default; anything from 1×1 up to 12×12.
+- **Different content per cell** — a browser (embedded WebView2) or any Windows program.
+- **Windows stay inside their cell** — a program's window becomes a child window, so maximizing it
+  or going full screen never takes it outside the cell.
+- **Click to zoom and type straight away** — clicking a cell fills the whole monitor with it, and
+  from then on the keyboard and mouse go to that app. Press `Esc` to return to the grid.
+- **Remembers and restores** — each cell's program and browser address are tracked continuously,
+  and the next launch brings the same arrangement back.
+- **Sets** — save several arrangements under names and switch between them instantly with
+  `Ctrl+1`–`Ctrl+9`.
 
-## 요구 사항
+The UI follows the Windows display language (Korean on Korean Windows, English otherwise). You can
+change it from the cell menu under **언어 / Language**.
 
-- Windows 10 1809 이상 (x64)
-- [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0) — Microsoft Store 버전은 런타임을 포함하므로 따로 설치할 필요가 없습니다.
-- [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) — 브라우저 칸에 필요합니다. Windows 11에는 기본 포함되어 있습니다.
+## Requirements
 
-## 설치
+- Windows 10 1809 or later (x64)
+- [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0) — the Microsoft Store
+  version bundles the runtime, so it needs no separate install.
+- [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) —
+  needed for browser cells. Windows 11 ships with it.
 
-- **Microsoft Store** — 설치와 업데이트를 Store가 관리합니다. 런타임이 패키지에 들어 있어 사전 준비가 없습니다.
-- **MSIX 사이드로딩** — 사내 서버나 공유 폴더에서 배포하는 방식입니다. `.appinstaller`를 실행하면 이후 새 버전을 앱이 스스로 가져옵니다.
-- **설치 프로그램(.exe)** — [Releases](https://github.com/MinaryHub/GridDisplay/releases)의
-  `GridDisplay-Setup-x.y.z.exe`를 실행합니다. 관리자 권한이 필요 없고, 이후 새 버전은 앱이 직접
-  받아 스스로 교체합니다. MSIX를 쓰기 어려운 환경을 위한 경로입니다.
+## Installation
 
-설치 프로그램은 `%LOCALAPPDATA%\Programs\GridDisplay`에 넣습니다. `Program Files`가 아닌 이유는
-자동 업데이트 때문입니다 — 그 경로의 업데이트는 프로그램이 자기 설치 폴더를 덮어쓰는 방식이라,
-일반 사용자가 쓸 수 없는 위치에 설치하면 매번 관리자 권한을 물어보게 됩니다.
+- **Microsoft Store** — the Store handles installation and updates. The runtime is inside the
+  package, so there is nothing to prepare.
+- **MSIX sideloading** — for distribution from an internal server or a shared folder. Run the
+  `.appinstaller` once, and the app fetches new versions by itself from then on.
+- **Installer (.exe)** — run `GridDisplay-Setup-x.y.z.exe` from
+  [Releases](https://github.com/MinaryHub/GridDisplay/releases). No administrator rights are
+  needed, and later versions are downloaded and swapped in by the app itself. This route is for
+  environments where MSIX is hard to use.
 
-MSIX 두 배포물을 만드는 방법과 Store 등록 절차는 [`packaging/README.md`](packaging/README.md)에,
-설치 프로그램 만드는 방법은 `tools\release.ps1` 에 있습니다.
+The installer puts the app in `%LOCALAPPDATA%\Programs\GridDisplay`. It avoids `Program Files`
+because of automatic updates: on this route the app updates by overwriting its own install folder,
+so installing somewhere a standard user cannot write would mean an administrator prompt on every
+update.
 
-## 빌드 및 실행
+How to build the two MSIX packages and submit to the Store is described in
+[`packaging/README.md`](packaging/README.md); how to build the installer is in `tools\release.ps1`.
+
+## Build and run
 
 ```powershell
 dotnet build src\GridDisplay\GridDisplay.csproj -c Release
 dotnet run   --project src\GridDisplay\GridDisplay.csproj
 ```
 
-배포용 단일 폴더 출력:
+Single-folder output for distribution:
 
 ```powershell
 dotnet publish src\GridDisplay\GridDisplay.csproj -c Release -r win-x64 --self-contained false -o publish
 ```
 
-## 사용법
+## Usage
 
-| 조작 | 동작 |
+| Action | Result |
 | --- | --- |
-| 칸 클릭 | 모니터 전체로 확대하고 바로 입력 모드 |
-| 빈 칸 클릭 | 해당 칸 설정 창 |
-| 칸 우클릭 | 셀 메뉴 (설정 · 새로 고침 · 실시간 표시 · 세트 바꾸기 · 격자 크기 · 세트 관리 · 단축키 · 버전 및 업데이트 · 종료) |
-| 메뉴 밖 클릭 / `Esc` | 우클릭 메뉴 닫기 |
-| 화면 위쪽 가장자리의 ✕ | 확대 해제하고 격자로 (마우스를 위로 올리면 나타남) |
-| `Esc` | 입력 모드와 확대를 함께 해제하고 격자로 |
-| 방향키 / `Enter` | 칸 선택 이동 / 확대 |
-| `Ctrl+1`~`Ctrl+9` | 저장된 세트 전환 (우클릭 › 세트 바꾸기 와 같음) |
-| `Ctrl+R` | 선택한 칸 새로 고침 |
-| `F11` | 창 전체 화면 전환 |
+| Click a cell | Zoom it to the full monitor and switch straight to input mode |
+| Click an empty cell | Open that cell's settings |
+| Right-click a cell | Cell menu (Cell settings… · Refresh · Live in grid · Switch set · Grid size · Manage sets… · Shortcuts · Version and updates… · Exit) |
+| Click outside the menu / `Esc` | Close the right-click menu |
+| ✕ at the top edge of the screen | Leave the zoom and return to the grid (appears when the mouse nears the top) |
+| `Esc` | Leave input mode and the zoom together, back to the grid |
+| Arrow keys / `Enter` | Move the cell selection / zoom |
+| `Ctrl+1`–`Ctrl+9` | Switch to a saved set (same as right-click › Switch set) |
+| `Ctrl+R` | Refresh the selected cell |
+| `F11` | Toggle full screen for the window |
 
-입력 모드에서는 `Esc`를 제외한 모든 키가 실행 중인 앱으로 전달됩니다. `Esc`는 격자로 돌아가는 데
-쓰이므로 앱에는 전달되지 않습니다. 입력 중인 화면 위에는 아무 안내도 겹쳐 띄우지 않습니다.
+In input mode every key except `Esc` goes to the running app. `Esc` is reserved for returning to
+the grid, so the app never receives it. Nothing is overlaid on the screen while you are typing.
 
-격자 화면의 브라우저 칸은 **정지 화면**으로 보여 주고 사이트는 재워 둡니다(5분마다 새로 찍음).
-크게 보면 실시간으로 바뀌고, 그동안 나머지 칸은 모두 잠듭니다. 격자에서도 계속 움직여야 하는 칸은
-우클릭 › *격자에서도 실시간 표시* 를 켭니다.
+In the grid, browser cells are shown as **still pictures** while the site sleeps (the picture is
+refreshed every 5 minutes). A zoomed cell is live, and while it is, every other cell sleeps. For a
+cell that must keep moving in the grid too, turn on right-click › *Live in grid*.
 
-처음 실행하면 일반 창(타이틀 바 있음)으로 열립니다. `F11`이나 우클릭 › *전체 화면*으로 바꿀 수
-있고, 그 선택은 다음 실행에도 이어집니다. 전체 화면에는 타이틀 바가 없으므로 우클릭 › **종료**로
-끝냅니다.
+On first launch the app opens as a normal window with a title bar. Switch with `F11` or
+right-click › *Full screen (F11)*; the choice carries over to the next launch. Full screen has no
+title bar, so quit with right-click › **Exit**.
 
-## 여러 개 띄우기 (모니터 여러 대)
+Right-click › *Show cell labels* toggles the strip under each cell with its number and title.
 
-모니터마다 하나씩 여러 개를 동시에 띄울 수 있습니다. 이때는 **반드시 `--profile`로 이름을 붙여
-주세요.**
+## Running several copies (multiple monitors)
+
+You can run several copies at once, one per monitor. When you do, **always give each one a name
+with `--profile`.**
 
 ```powershell
-GridDisplay.exe --profile 좌측
-GridDisplay.exe --profile 중앙
-GridDisplay.exe --profile 우측
+GridDisplay.exe --profile left
+GridDisplay.exe --profile center
+GridDisplay.exe --profile right
 ```
 
-이름을 붙이지 않으면 셋이 같은 설정 파일을 함께 쓰게 되어, 한쪽에서 칸을 바꾸면 다른 쪽 구성이
-덮어써집니다. 이름을 붙이면 설정·브라우저 로그인·업데이트 파일이 각각 따로 보관됩니다.
+Without names, all three share one settings file, and changing a cell in one overwrites the
+arrangement of the others. With names, settings, browser sign-ins and update files are each kept
+separately.
 
-설치 프로그램으로 깔았다면 업데이트는 한 번에 하나만 할 수 있습니다. 같은 폴더에서 여러 개가
-돌고 있으면 설치를 막고 알려 주므로, 나머지를 먼저 닫아 주세요.
+If you installed with the installer, only one copy can update at a time. When several copies are
+running from the same folder the update is blocked with a notice, so close the others first.
 
-## 오래 켜 두기
+## Running for a long time
 
-며칠·몇 주씩 켜 두는 용도라 다음 장치가 들어 있습니다.
+The app is meant to stay up for days or weeks, and includes the following for that.
 
-**브라우저 칸 자동 새로 고침** — 기본 24시간마다 각 칸을 다시 불러옵니다. 오래 열어 둔 웹 페이지는
-그 자체로 메모리를 계속 붙잡는데, 새로 고침이 프로그램을 껐다 켜지 않고 되돌리는 유일한 방법입니다.
-주소는 이미 기억하고 있어 화면은 그대로 복원되고, 확대 중이거나 입력 모드일 때는 건너뜁니다.
-`state.json`의 `CellRecycleHours`로 조정하고 `0`이면 끕니다.
+**Automatic refresh of browser cells** — every cell is reloaded every 24 hours by default. A web
+page left open for a long time keeps holding on to more memory by itself, and a reload is the only
+way to reclaim it without restarting the program. The address is already remembered, so the screen
+comes back as it was; a cell that is zoomed or in input mode is skipped. Adjust it with
+`CellRecycleHours` in `state.json`; `0` turns it off.
 
-**기록 파일** — 문제가 생겼을 때 무엇이 늘어났는지 볼 수 있게 두 가지를 남깁니다.
+**Log files** — two files are kept so you can see what grew when something goes wrong.
 
-| 파일 | 내용 |
+| File | Contents |
 | --- | --- |
-| `health.log` | 30분마다 메모리·핸들·WebView2·시스템 여유 메모리 |
-| `input-hook.log` | 입력 처리가 느렸을 때만 기록 (평소에는 아무것도 쓰지 않습니다) |
+| `health.log` | Memory, handles, WebView2 and free system memory every 30 minutes |
+| `input-hook.log` | Written only when input handling was slow (nothing is written normally) |
 
-둘 다 `%LOCALAPPDATA%\GridDisplay`(프로필을 쓰면 그 아래)에 있고, 512KB를 넘으면 한 번 넘겨서
-보관합니다.
+Both live in `%LOCALAPPDATA%\GridDisplay` (under the profile folder when using a profile), and are
+rotated once when they pass 512KB.
 
-**메모리가 빠듯하다면** `state.json`의 `SuspendHiddenCells`를 `true`로 두세요. 화면에 보이지 않는
-칸이 메모리를 놓아줍니다. 대신 그 칸으로 전환할 때 잠깐 느려집니다.
+**Short on memory?** Set `SuspendHiddenCells` to `true` in `state.json`. Cells that are not on
+screen then release their memory, at the cost of a short delay when you switch to them.
 
-## 설정 파일
+## Settings files
 
-- 세트·칸 구성: `%APPDATA%\GridDisplay\state.json`
-- 브라우저 프로필: `%LOCALAPPDATA%\GridDisplay\WebView2`
-- 업데이트 임시 파일·기록: `%LOCALAPPDATA%\GridDisplay\Updates`
+- Sets and cell layout: `%APPDATA%\GridDisplay\state.json`
+- Browser profiles: `%LOCALAPPDATA%\GridDisplay\WebView2`
+- Update staging files and logs: `%LOCALAPPDATA%\GridDisplay\Updates`
 
-`--profile 이름`으로 실행하면 위 경로가 각각 `profiles\이름` 아래로 갈라집니다.
+Running with `--profile name` moves each of these under `profiles\name`.
 
-칸을 이동하며 브라우징하면 주소가 자동으로 갱신되어 저장되므로, 별도 저장 조작 없이 다음 실행에서 같은 화면이 복원됩니다.
+As you browse within a cell, its address is updated and saved automatically, so the same screen
+comes back on the next launch without any explicit save.
 
-## 칸 설정
+## Cell settings
 
-**브라우저** — 주소만 입력하면 됩니다. *프로필*에 서로 다른 이름을 넣으면 같은 사이트에 다른 계정으로 동시에 로그인할 수 있습니다.
+**Browser** — just enter an address. Putting different names in *Profile* lets you be signed in to
+the same site with different accounts at the same time.
 
-**프로그램** — 실행 파일 경로를 지정합니다. 창을 여러 개 여는 앱이라면 *창 제목 포함*에 식별 문자열을 넣어 올바른 창을 고르게 하세요. 이미 떠 있는 창을 가져오려면 *실행 중인 창 가져오기*를 켭니다.
+**Program** — give the path to the executable. For an app that opens several windows, put an
+identifying string in *Window title contains* so the right window is picked. To take over a window
+that is already open, turn on *Attach to a running window*.
 
-## 알려진 제약
+## Known limitations
 
-- 프로그램 칸은 창을 가진 일반 데스크톱 앱에만 동작합니다. UWP/스토어 앱, 관리자 권한으로 실행된 앱(본 프로그램이 일반 권한일 때)은 편입할 수 없습니다.
-- 외부 브라우저를 프로그램 칸으로 띄우면 주소를 기억할 수 없습니다. 주소 복원이 필요하면 브라우저 칸을 사용하세요.
-- 셀을 해제하거나 종료할 때, *셀 해제 시 프로그램 종료*가 꺼져 있으면 앱이 원래 크기의 독립 창으로 되돌아갑니다.
+- Program cells work only with ordinary desktop apps that have a window. UWP/Store apps, and apps
+  running as administrator (while this program runs with normal rights), cannot be embedded.
+- An external browser shown in a program cell cannot have its address remembered. Use a browser
+  cell when you need the address restored.
+- When a cell is released or the app exits with *Close program when the cell is released* turned
+  off, the app goes back to being a standalone window at its original size.

@@ -305,7 +305,13 @@ for consistency.
 
 ## Conventions
 
-- UI strings and user-facing messages are Korean; code, comments and identifiers are English.
+- UI strings and user-facing messages are bilingual: every caption is written as
+  `L.T("한국어", "English")` (`Services/Localization.cs`), Korean on a Korean Windows and English
+  elsewhere, overridable with `AppState.Language` ("ko"/"en", applied at the next start because
+  captions are read once when each control is built). Both halves sit at the call site so neither
+  can go missing. Log lines are English only — they are read by developers, not the wall's user.
+  Code, comments and identifiers are English. English captions run wider than Korean, so check a
+  fixed-width control against both.
 - The app runs `ApplicationHighDpiMode=PerMonitorV2`, so fonts scale with the monitor but
   hard-coded pixel bounds do not. `MainForm` sizes its painted chrome with `MainForm.Scaled(...)`
   (there is no toolbar: everything it held lives in the cell menu), and `CellSettingsForm` authors

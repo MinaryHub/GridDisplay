@@ -19,15 +19,15 @@ public sealed class UpdateForm : Form
     private readonly bool _storeManaged = AppVersion.IsStoreInstall;
 
     private readonly TextBox _feedUrl = new();
-    private readonly CheckBox _autoCheck = new() { Text = "자동으로 확인", AutoSize = true };
+    private readonly CheckBox _autoCheck = new() { Text = L.T("자동으로 확인", "Check automatically every"), AutoSize = true };
     private readonly NumericUpDown _hours = new() { Minimum = 1, Maximum = 168, Increment = 1, Value = 24 };
     private readonly Label _lastChecked = new() { AutoSize = true, ForeColor = Color.FromArgb(90, 90, 100) };
-    private readonly Button _check = new() { Text = "지금 확인" };
+    private readonly Button _check = new() { Text = L.T("지금 확인", "Check now") };
     private readonly Label _status = new();
     private readonly ProgressBar _progress = new() { Visible = false };
-    private readonly Button _installLater = new() { Text = "설치 (다음 실행 시 적용)", Enabled = false };
-    private readonly Button _installNow = new() { Text = "설치 후 다시 시작", Enabled = false };
-    private readonly Button _close = new() { Text = "닫기" };
+    private readonly Button _installLater = new() { Text = L.T("설치 (다음 실행 시 적용)", "Install (applies on next start)"), Enabled = false };
+    private readonly Button _installNow = new() { Text = L.T("설치 후 다시 시작", "Install and restart"), Enabled = false };
+    private readonly Button _close = new() { Text = L.T("닫기", "Close") };
 
     private UpdateCheckResult? _found;
     private bool _busy;
@@ -37,7 +37,7 @@ public sealed class UpdateForm : Form
         _state = state;
         _updates = updates;
 
-        Text = "버전 및 업데이트";
+        Text = L.T("버전 및 업데이트", "Version and updates");
         StartPosition = FormStartPosition.CenterParent;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MinimizeBox = false;
@@ -50,12 +50,12 @@ public sealed class UpdateForm : Form
         int y = S(12);
 
         // --- what is running ---
-        var versionBox = new GroupBox { Text = "현재 버전", Bounds = new Rectangle(S(12), y, S(516), S(104)) };
-        versionBox.Controls.Add(Caption("버전", S(16), S(26)));
+        var versionBox = new GroupBox { Text = L.T("현재 버전", "Current version"), Bounds = new Rectangle(S(12), y, S(516), S(104)) };
+        versionBox.Controls.Add(Caption(L.T("버전", "Version"), S(16), S(26)));
         versionBox.Controls.Add(Value(AppVersion.Display, S(110), S(26), S(390)));
-        versionBox.Controls.Add(Caption("설치 형식", S(16), S(52)));
+        versionBox.Controls.Add(Caption(L.T("설치 형식", "Install type"), S(16), S(52)));
         versionBox.Controls.Add(Value(AppVersion.InstallKindText, S(110), S(52), S(390)));
-        versionBox.Controls.Add(Caption("패키지", S(16), S(78)));
+        versionBox.Controls.Add(Caption(L.T("패키지", "Package"), S(16), S(78)));
         versionBox.Controls.Add(Value(
             string.IsNullOrEmpty(AppVersion.PackageFamilyName) ? "-" : AppVersion.PackageFamilyName,
             S(110), S(78), S(390)));
@@ -63,7 +63,7 @@ public sealed class UpdateForm : Form
         y += S(116);
 
         // --- where updates come from ---
-        var feedBox = new GroupBox { Text = "업데이트 원본", Bounds = new Rectangle(S(12), y, S(516), S(126)) };
+        var feedBox = new GroupBox { Text = L.T("업데이트 원본", "Update source"), Bounds = new Rectangle(S(12), y, S(516), S(126)) };
         if (_storeManaged) FillStoreFeedBox(feedBox); else FillSelfManagedFeedBox(feedBox);
         Controls.Add(feedBox);
         y += S(138);
@@ -87,10 +87,12 @@ public sealed class UpdateForm : Form
         y += S(24);
 
         // The one action a Store build offers reuses this button: same slot, different job.
-        _installLater.Bounds = new Rectangle(S(12), y, S(180), S(30));
+        // Widths fit the longest English captions ("Install (applies on next start)",
+        // "Install now and restart"), which are wider than the Korean ones.
+        _installLater.Bounds = new Rectangle(S(12), y, S(200), S(30));
         if (_storeManaged)
         {
-            _installLater.Text = "Microsoft Store 열기";
+            _installLater.Text = L.T("Microsoft Store 열기", "Open Microsoft Store");
             _installLater.Enabled = true;
             _installLater.Click += (_, _) => ShowApplyResult(UpdateService.OpenStoreUpdates());
         }
@@ -100,7 +102,7 @@ public sealed class UpdateForm : Form
         }
         Controls.Add(_installLater);
 
-        _installNow.Bounds = new Rectangle(S(200), y, S(150), S(30));
+        _installNow.Bounds = new Rectangle(S(220), y, S(170), S(30));
         _installNow.Click += async (_, _) => await ApplyAsync(restartNow: true).ConfigureAwait(true);
         _installNow.Visible = !_storeManaged;
         Controls.Add(_installNow);
@@ -116,21 +118,27 @@ public sealed class UpdateForm : Form
 
     private void FillStoreFeedBox(GroupBox box) => box.Controls.Add(new Label
     {
-        Text = "Microsoft Store가 이 앱의 업데이트를 관리합니다.\n\n" +
-               "새 버전은 Store가 백그라운드에서 내려받아 설치하므로 주소를 지정하거나\n" +
-               "직접 설치할 필요가 없습니다. 지금 바로 확인하려면 아래에서 Store를 여세요.",
+        Text = L.T(
+            "Microsoft Store가 이 앱의 업데이트를 관리합니다.\n\n" +
+            "새 버전은 Store가 백그라운드에서 내려받아 설치하므로 주소를 지정하거나\n" +
+            "직접 설치할 필요가 없습니다. 지금 바로 확인하려면 아래에서 Store를 여세요.",
+            // No hard line breaks: the label wraps English on its own.
+            "Microsoft Store manages updates for this app.\n\n" +
+            "The Store downloads and installs new versions in the background, so there is no " +
+            "address to set. To check right now, open the Store below."),
         Bounds = new Rectangle(S(16), S(28), S(484), S(80)),
     });
 
     private void FillSelfManagedFeedBox(GroupBox feedBox)
     {
-        feedBox.Controls.Add(Caption("주소", S(16), S(27)));
+        feedBox.Controls.Add(Caption(L.T("주소", "Address"), S(16), S(27)));
         _feedUrl.Bounds = new Rectangle(S(110), S(24), S(390), S(23));
         _feedUrl.PlaceholderText = "https://example/griddisplay/GridDisplay.appinstaller";
         feedBox.Controls.Add(_feedUrl);
         feedBox.Controls.Add(new Label
         {
-            Text = ".appinstaller 파일 또는 {\"version\":\"1.2.3\",\"url\":\"…\"} 형식의 update.json 주소",
+            Text = L.T(".appinstaller 파일 또는 {\"version\":\"1.2.3\",\"url\":\"…\"} 형식의 update.json 주소",
+                       ".appinstaller, or update.json as {\"version\":\"1.2.3\",\"url\":\"…\"}"),
             Bounds = new Rectangle(S(110), S(50), S(390), S(18)),
             ForeColor = Color.FromArgb(90, 90, 100),
         });
@@ -141,12 +149,16 @@ public sealed class UpdateForm : Form
         feedBox.Controls.Add(_hours);
         var hoursSuffix = new Label
         {
-            Text = "시간마다",
+            Text = L.T("시간마다", "hours"),
             AutoSize = true,
             Location = new Point(_hours.Right + S(6), S(79)),
         };
         feedBox.Controls.Add(hoursSuffix);
-        _lastChecked.Location = new Point(hoursSuffix.Right + S(16), S(79));
+        // English runs out of room on that row ("Check automatically every 24 hours  Last
+        // checked …"), so the last-check note drops to a line of its own under the checkbox.
+        _lastChecked.Location = L.Korean
+            ? new Point(hoursSuffix.Right + S(16), S(79))
+            : new Point(S(114), S(103));
         feedBox.Controls.Add(_lastChecked);
     }
 
@@ -156,8 +168,8 @@ public sealed class UpdateForm : Form
         _autoCheck.Checked = _state.AutoCheckUpdates;
         _hours.Value = Math.Clamp(_state.UpdateCheckHours <= 0 ? 24 : _state.UpdateCheckHours, 1, 168);
         _lastChecked.Text = _state.LastUpdateCheckUtc is { } utc
-            ? $"마지막 확인 {utc.ToLocalTime():yyyy-MM-dd HH:mm}"
-            : "확인한 적 없음";
+            ? L.T($"마지막 확인 {utc.ToLocalTime():yyyy-MM-dd HH:mm}", $"Last checked {utc.ToLocalTime():yyyy-MM-dd HH:mm}")
+            : L.T("확인한 적 없음", "Never checked");
     }
 
     /// <summary>Push the edits back before every action, so a check uses the address just typed.</summary>
@@ -189,7 +201,7 @@ public sealed class UpdateForm : Form
     {
         if (_busy) return;
         CommitState();
-        SetBusy(true, "확인 중…");
+        SetBusy(true, L.T("확인 중…", "Checking…"));
         try
         {
             var result = await _updates.CheckAsync().ConfigureAwait(true);
@@ -206,7 +218,9 @@ public sealed class UpdateForm : Form
     {
         if (_busy || _found is null) return;
         CommitState();
-        SetBusy(true, restartNow ? "설치 중… 완료되면 앱이 다시 시작됩니다." : "설치 중…");
+        SetBusy(true, restartNow
+            ? L.T("설치 중… 완료되면 앱이 다시 시작됩니다.", "Installing… the app restarts when it is done.")
+            : L.T("설치 중…", "Installing…"));
         _progress.Visible = true;
         _progress.Value = 0;
         var progress = new Progress<int>(p => _progress.Value = Math.Clamp(p, 0, 100));
@@ -243,7 +257,8 @@ public sealed class UpdateForm : Form
         {
             // The button is already labelled and enabled for the Store; only the caption is left.
             _status.ForeColor = ForeColor;
-            _status.Text = $"Microsoft Store가 자동으로 업데이트합니다 (현재 {AppVersion.Display}).";
+            _status.Text = L.T($"Microsoft Store가 자동으로 업데이트합니다 (현재 {AppVersion.Display}).",
+                               $"Microsoft Store updates this app automatically (current: {AppVersion.Display}).");
             return;
         }
 
@@ -255,13 +270,17 @@ public sealed class UpdateForm : Form
         bool selfInstalls = AppVersion.IsPackaged || (_found is not null && CanReplaceItself(_found));
         _installNow.Enabled = _found is not null && selfInstalls;
         _installLater.Enabled = _found is not null && (AppVersion.IsPackaged || !selfInstalls);
-        _installLater.Text = AppVersion.IsPackaged ? "설치 (다음 실행 시 적용)" : "설치 파일 열기";
-        _installNow.Text = AppVersion.IsPackaged ? "설치 후 다시 시작" : "지금 설치하고 다시 시작";
+        _installLater.Text = AppVersion.IsPackaged
+            ? L.T("설치 (다음 실행 시 적용)", "Install (applies on next start)")
+            : L.T("설치 파일 열기", "Open installer");
+        _installNow.Text = AppVersion.IsPackaged
+            ? L.T("설치 후 다시 시작", "Install and restart")
+            : L.T("지금 설치하고 다시 시작", "Install now and restart");
 
         if (result is null)
         {
             _status.ForeColor = ForeColor;
-            _status.Text = "'지금 확인'을 눌러 새 버전을 확인하세요.";
+            _status.Text = L.T("'지금 확인'을 눌러 새 버전을 확인하세요.", "Click 'Check now' to look for a new version.");
             return;
         }
 

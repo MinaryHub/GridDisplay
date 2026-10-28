@@ -73,11 +73,11 @@ public static class HealthMonitor
                 dwLength = (uint)System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.MEMORYSTATUSEX>(),
             };
             if (NativeMethods.GlobalMemoryStatusEx(ref status))
-                memory = $"{status.ullAvailPhys / (1024 * 1024)}MB 남음 / 사용률 {status.dwMemoryLoad}%";
+                memory = $"{status.ullAvailPhys / (1024 * 1024)}MB free / load {status.dwMemoryLoad}%";
 
-            Write($"가동 {uptime.TotalHours:F1}시간 · 작업셋 {working}MB · 전용 {priv}MB · 관리힙 {managed}MB · "
-                + $"핸들 {handles} · 스레드 {threads} · WebView2(전체) {webview}개 {webviewMb}MB · "
-                + $"시스템 메모리 {memory} · {note}");
+            Write($"uptime {uptime.TotalHours:F1}h · working set {working}MB · private {priv}MB · managed heap {managed}MB · "
+                + $"handles {handles} · threads {threads} · WebView2 (all) {webview} procs {webviewMb}MB · "
+                + $"system memory {memory} · {note}");
         }
         catch
         {
