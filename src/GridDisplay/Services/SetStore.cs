@@ -57,7 +57,7 @@ public sealed class SetStore : IDisposable
 
     public AppState Settings { get; private set; } = new();
 
-    /// <summary>Every set on disk, in name order.</summary>
+    /// <summary>Every set on disk, in the order the user arranged them (name order until they do).</summary>
     public IReadOnlyList<GridPreset> Sets => _sets;
 
     public SetStore()
@@ -138,7 +138,9 @@ public sealed class SetStore : IDisposable
             }
         }
 
-        _sets.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.CurrentCulture));
+        _sets.Sort((a, b) => a.Order != b.Order
+            ? a.Order.CompareTo(b.Order)
+            : string.Compare(a.Name, b.Name, StringComparison.CurrentCulture));
     }
 
     /// <summary>
@@ -248,6 +250,8 @@ public sealed class SetStore : IDisposable
         if (string.IsNullOrWhiteSpace(set.Id)) set.Id = Guid.NewGuid().ToString("N");
         lock (_gate)
         {
+            // New sets go to the end of the list, wherever their name would sort.
+            set.Order = _sets.Count == 0 ? 1 : _sets.Max(s => s.Order) + 1;
             _sets.Add(set);
             var path = ReserveFile(set);
             WriteAtomic(path, JsonSerializer.Serialize(set, JsonOptions));
@@ -265,6 +269,34 @@ public sealed class SetStore : IDisposable
                 _files.Remove(set.Id);
             }
             _sets.Remove(set);
+        }
+    }
+
+    /// <summary>
+    /// Move a set one or more places up (negative) or down the list. Every set is renumbered
+    /// and the ones whose position changed are written, so the order survives a restart — the
+    /// first move after an upgrade therefore touches every file, since they all start at 0.
+    /// </summary>
+    public bool Move(GridPreset set, int delta)
+    {
+        if (_disposed || set is null) return false;
+        lock (_gate)
+        {
+            int from = _sets.IndexOf(set);
+            if (from < 0) return false;
+            int to = Math.Clamp(from + delta, 0, _sets.Count - 1);
+            if (to == from) return false;
+
+            _sets.RemoveAt(from);
+            _sets.Insert(to, set);
+
+            for (int i = 0; i < _sets.Count; i++)
+            {
+                if (_sets[i].Order == i + 1) continue;
+                _sets[i].Order = i + 1;
+                SaveSet(_sets[i]);
+            }
+            return true;
         }
     }
 
