@@ -1,7 +1,7 @@
 ﻿{
-    "version":  "1.0.13",
-    "url":  "https://github.com/MinaryHub/GridDisplay/releases/download/v1.0.13/GridDisplay-1.0.13.zip",
-    "sha256":  "F01ECAD2AC4D95673476D207CAEAF49BE048942171BEABDE7E5EE386DDCBA655",
-    "notes":  "세트 관리에서 세트 순서를 옮길 수 있습니다 (위로/아래로 버튼, Alt+↑/↓)",
+    "version":  "1.0.14",
+    "url":  "https://github.com/MinaryHub/GridDisplay/releases/download/v1.0.14/GridDisplay-1.0.14.zip",
+    "sha256":  "A25123BF51C24E18F0AF63D58A93EEF468D986979496CFA4B3DF4CAF0DFB0E33",
+    "notes":  "English UI: the app follows the Windows language, or pick one under 언어 / Language (applies after restart). 영어 UI 지원 — Windows 언어를 따르며 셀 메뉴 \u0027언어 / Language\u0027에서 직접 선택 가능(재시작 후 적용).",
     "published":  "2026-10-28"
 }
