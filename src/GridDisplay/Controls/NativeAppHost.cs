@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using GridDisplay.Interop;
 using GridDisplay.Models;
+using GridDisplay.Services;
 
 namespace GridDisplay.Controls;
 
@@ -42,7 +43,7 @@ public sealed class NativeAppHost : Panel
     public async Task<string?> AttachAsync(CellConfig config, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(config.ExecutablePath) && !config.AttachToRunning)
-            return "실행 파일이 지정되지 않았습니다.";
+            return L.T("실행 파일이 지정되지 않았습니다.", "No executable is set.");
 
         var processName = string.IsNullOrWhiteSpace(config.ExecutablePath)
             ? string.Empty
@@ -61,7 +62,7 @@ public sealed class NativeAppHost : Panel
         if (target == IntPtr.Zero)
         {
             if (string.IsNullOrWhiteSpace(config.ExecutablePath))
-                return "실행 중인 창을 찾지 못했습니다.";
+                return L.T("실행 중인 창을 찾지 못했습니다.", "Could not find the running window.");
 
             try
             {
@@ -78,11 +79,11 @@ public sealed class NativeAppHost : Panel
             }
             catch (Win32Exception ex)
             {
-                return $"실행 실패: {ex.Message}";
+                return L.T($"실행 실패: {ex.Message}", $"Failed to start: {ex.Message}");
             }
             catch (Exception ex)
             {
-                return $"실행 실패: {ex.Message}";
+                return L.T($"실행 실패: {ex.Message}", $"Failed to start: {ex.Message}");
             }
 
             target = await WindowFinder
@@ -95,10 +96,10 @@ public sealed class NativeAppHost : Panel
         }
 
         if (target == IntPtr.Zero)
-            return "창을 찾지 못했습니다. 창 제목 일치 문자열을 지정해 보세요.";
+            return L.T("창을 찾지 못했습니다. 창 제목 일치 문자열을 지정해 보세요.", "Could not find the window. Try setting a window title match.");
 
         if (IsDisposed || !IsHandleCreated)
-            return "셀이 이미 해제되었습니다.";
+            return L.T("셀이 이미 해제되었습니다.", "The cell has already been released.");
 
         Embed(target);
         _guard.Start();

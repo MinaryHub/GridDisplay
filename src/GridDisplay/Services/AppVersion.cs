@@ -66,16 +66,16 @@ public static class AppVersion
 
     public static string FullDisplay => IsStoreInstall
         ? $"{Display} (Microsoft Store)"
-        : IsPackaged ? $"{Display} (MSIX)" : $"{Display} (MSIX 아님)";
+        : IsPackaged ? $"{Display} (MSIX)" : $"{Display} " + L.T("(MSIX 아님)", "(not MSIX)");
 
     public static string InstallKindText => IsStoreInstall
-        ? "Microsoft Store에서 설치됨 — 업데이트는 Store가 관리합니다"
+        ? L.T("Microsoft Store에서 설치됨 — 업데이트는 Store가 관리합니다", "Installed from Microsoft Store — the Store manages updates")
         : IsPackaged
-            ? "MSIX 패키지로 설치됨"
+            ? L.T("MSIX 패키지로 설치됨", "Installed as an MSIX package")
             // Not "cannot update": an unpackaged build replaces its own install folder when the
             // feed offers a hashed .zip. Whether this particular feed does is only known after a
             // check, so the wording stays about where it came from, not what it can do.
-            : "설치 프로그램(.exe)으로 설치됨";
+            : L.T("설치 프로그램(.exe)으로 설치됨", "Installed with the setup program (.exe)");
 
     private static bool SafeHasPackageIdentity()
     {

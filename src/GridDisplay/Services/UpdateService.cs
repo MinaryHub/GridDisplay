@@ -114,7 +114,8 @@ public sealed class UpdateService
         if (feed.Length > 0) return await CheckFeedAsync(feed, ct).ConfigureAwait(true);
         if (AppVersion.IsPackaged) return await CheckWithWindowsAsync().ConfigureAwait(true);
         return new UpdateCheckResult(UpdateStatus.NotConfigured, null, null,
-            "업데이트 주소가 설정되지 않았습니다. .appinstaller 또는 update.json 주소를 입력하세요.");
+            L.T("업데이트 주소가 설정되지 않았습니다. .appinstaller 또는 update.json 주소를 입력하세요.",
+                "No update address is set. Enter an .appinstaller or update.json address."));
     }
 
     // ------------------------------------------------------------------ Store
@@ -128,7 +129,8 @@ public sealed class UpdateService
 
     private static UpdateCheckResult ManagedByStore() =>
         new(UpdateStatus.ManagedByStore, null, null,
-            $"Microsoft Store가 자동으로 업데이트합니다 (현재 {AppVersion.Display}).");
+            L.T($"Microsoft Store가 자동으로 업데이트합니다 (현재 {AppVersion.Display}).",
+                $"Microsoft Store updates this app automatically (current {AppVersion.Display})."));
 
     /// <summary>Open the Store on its updates page. The only update action a Store build offers.</summary>
     public static UpdateApplyResult OpenStoreUpdates()
@@ -137,11 +139,12 @@ public sealed class UpdateService
         {
             Process.Start(new ProcessStartInfo(StoreUpdatesUri) { UseShellExecute = true });
             return new UpdateApplyResult(UpdateApplyOutcome.OpenedStore,
-                "Microsoft Store를 열었습니다. '업데이트 가져오기'를 누르면 새 버전이 설치됩니다.");
+                L.T("Microsoft Store를 열었습니다. '업데이트 가져오기'를 누르면 새 버전이 설치됩니다.",
+                    "Microsoft Store is open. Press 'Get updates' to install the new version."));
         }
         catch (Exception ex)
         {
-            return new UpdateApplyResult(UpdateApplyOutcome.Failed, $"Microsoft Store를 열 수 없습니다: {ex.Message}");
+            return new UpdateApplyResult(UpdateApplyOutcome.Failed, L.T($"Microsoft Store를 열 수 없습니다: {ex.Message}", $"Could not open Microsoft Store: {ex.Message}"));
         }
     }
 
@@ -150,7 +153,7 @@ public sealed class UpdateService
     private async Task<UpdateCheckResult> CheckFeedAsync(string feedUrl, CancellationToken ct)
     {
         if (!Uri.TryCreate(feedUrl, UriKind.Absolute, out var uri))
-            return new UpdateCheckResult(UpdateStatus.Failed, null, null, $"업데이트 주소가 올바르지 않습니다: {feedUrl}");
+            return new UpdateCheckResult(UpdateStatus.Failed, null, null, L.T($"업데이트 주소가 올바르지 않습니다: {feedUrl}", $"The update address is not valid: {feedUrl}"));
 
         string body;
         try
@@ -163,7 +166,7 @@ public sealed class UpdateService
         }
         catch (Exception ex)
         {
-            return new UpdateCheckResult(UpdateStatus.Failed, null, null, $"업데이트 정보를 가져올 수 없습니다: {ex.Message}");
+            return new UpdateCheckResult(UpdateStatus.Failed, null, null, L.T($"업데이트 정보를 가져올 수 없습니다: {ex.Message}", $"Could not get update information: {ex.Message}"));
         }
 
         try
@@ -173,13 +176,13 @@ public sealed class UpdateService
                 : ParseJsonFeed(body, uri);
 
             if (latest is null)
-                return new UpdateCheckResult(UpdateStatus.Failed, null, null, "업데이트 정보에서 버전을 찾을 수 없습니다.");
+                return new UpdateCheckResult(UpdateStatus.Failed, null, null, L.T("업데이트 정보에서 버전을 찾을 수 없습니다.", "No version found in the update information."));
 
             return Compare(latest, source) with { Sha256 = sha256 };
         }
         catch (Exception ex)
         {
-            return new UpdateCheckResult(UpdateStatus.Failed, null, null, $"업데이트 정보를 해석할 수 없습니다: {ex.Message}");
+            return new UpdateCheckResult(UpdateStatus.Failed, null, null, L.T($"업데이트 정보를 해석할 수 없습니다: {ex.Message}", $"Could not read the update information: {ex.Message}"));
         }
     }
 
@@ -190,7 +193,7 @@ public sealed class UpdateService
     /// </summary>
     private static (Version? Latest, string Source, string? Sha256) ParseAppInstaller(string xml, Uri feedUri)
     {
-        var root = XDocument.Parse(xml).Root ?? throw new InvalidDataException("빈 .appinstaller 파일입니다.");
+        var root = XDocument.Parse(xml).Root ?? throw new InvalidDataException(L.T("빈 .appinstaller 파일입니다.", "The .appinstaller file is empty."));
 
         var main = root.Elements().FirstOrDefault(e => e.Name.LocalName is "MainPackage" or "MainBundle");
         var version = ParseVersion(main?.Attribute("Version")?.Value) ?? ParseVersion(root.Attribute("Version")?.Value);
@@ -221,10 +224,11 @@ public sealed class UpdateService
     {
         if (Normalize(latest) <= Normalize(AppVersion.Current))
             return new UpdateCheckResult(UpdateStatus.UpToDate, latest, source,
-                $"최신 버전입니다 (현재 {AppVersion.Display}).");
+                L.T($"최신 버전입니다 (현재 {AppVersion.Display}).", $"You have the latest version (current {AppVersion.Display})."));
 
         return new UpdateCheckResult(UpdateStatus.Available, latest, source,
-            $"새 버전 {Short(latest)}을(를) 설치할 수 있습니다 (현재 {AppVersion.Display}).");
+            L.T($"새 버전 {Short(latest)}을(를) 설치할 수 있습니다 (현재 {AppVersion.Display}).",
+                $"New version {Short(latest)} is available (current {AppVersion.Display})."));
     }
 
     // ------------------------------------------------------------------ Windows-side check
@@ -238,16 +242,16 @@ public sealed class UpdateService
             {
                 Windows.ApplicationModel.PackageUpdateAvailability.Available or Windows.ApplicationModel.PackageUpdateAvailability.Required =>
                     new UpdateCheckResult(UpdateStatus.Available, null, null,
-                        "새 버전이 있습니다. 설치 원본에서 업데이트할 수 있습니다."),
+                        L.T("새 버전이 있습니다. 설치 원본에서 업데이트할 수 있습니다.", "A new version is available. You can update from the install source.")),
                 Windows.ApplicationModel.PackageUpdateAvailability.NoUpdates =>
-                    new UpdateCheckResult(UpdateStatus.UpToDate, null, null, $"최신 버전입니다 (현재 {AppVersion.Display})."),
+                    new UpdateCheckResult(UpdateStatus.UpToDate, null, null, L.T($"최신 버전입니다 (현재 {AppVersion.Display}).", $"You have the latest version (current {AppVersion.Display}).")),
                 _ => new UpdateCheckResult(UpdateStatus.NotConfigured, null, null,
-                    "설치 원본에 업데이트 정보가 없습니다. .appinstaller 주소를 입력하세요."),
+                    L.T("설치 원본에 업데이트 정보가 없습니다. .appinstaller 주소를 입력하세요.", "The install source has no update information. Enter an .appinstaller address.")),
             };
         }
         catch (Exception ex)
         {
-            return new UpdateCheckResult(UpdateStatus.Failed, null, null, $"업데이트 확인에 실패했습니다: {ex.Message}");
+            return new UpdateCheckResult(UpdateStatus.Failed, null, null, L.T($"업데이트 확인에 실패했습니다: {ex.Message}", $"Update check failed: {ex.Message}"));
         }
     }
 
@@ -270,7 +274,7 @@ public sealed class UpdateService
         if (!AppVersion.IsPackaged)
         {
             if (source.Length == 0)
-                return new UpdateApplyResult(UpdateApplyOutcome.Failed, "설치 파일 주소를 알 수 없습니다.");
+                return new UpdateApplyResult(UpdateApplyOutcome.Failed, L.T("설치 파일 주소를 알 수 없습니다.", "The installer address is unknown."));
 
             // A zip with a hash beside it is the Inno-installed shape, and that one this build can
             // finish by itself: download, verify, and let UpdateInstaller swap the install folder.
@@ -286,16 +290,17 @@ public sealed class UpdateService
             {
                 Process.Start(new ProcessStartInfo(source) { UseShellExecute = true });
                 return new UpdateApplyResult(UpdateApplyOutcome.HandedToUser,
-                    "설치 파일을 열었습니다. 내려받은 .appinstaller 또는 .msix 파일을 실행해 업데이트하세요.");
+                    L.T("설치 파일을 열었습니다. 내려받은 .appinstaller 또는 .msix 파일을 실행해 업데이트하세요.",
+                        "The installer is open. Run the downloaded .appinstaller or .msix file to update."));
             }
             catch (Exception ex)
             {
-                return new UpdateApplyResult(UpdateApplyOutcome.Failed, $"설치 파일을 열 수 없습니다: {ex.Message}");
+                return new UpdateApplyResult(UpdateApplyOutcome.Failed, L.T($"설치 파일을 열 수 없습니다: {ex.Message}", $"Could not open the installer: {ex.Message}"));
             }
         }
 
         if (!Uri.TryCreate(source, UriKind.Absolute, out var uri))
-            return new UpdateApplyResult(UpdateApplyOutcome.Failed, "업데이트 주소가 올바르지 않습니다.");
+            return new UpdateApplyResult(UpdateApplyOutcome.Failed, L.T("업데이트 주소가 올바르지 않습니다.", "The update address is not valid."));
 
         try
         {
@@ -316,13 +321,13 @@ public sealed class UpdateService
                 return new UpdateApplyResult(UpdateApplyOutcome.Failed, DescribeFailure(result));
 
             return restartNow
-                ? new UpdateApplyResult(UpdateApplyOutcome.Restarting, "업데이트를 설치했습니다. 앱이 다시 시작됩니다.")
+                ? new UpdateApplyResult(UpdateApplyOutcome.Restarting, L.T("업데이트를 설치했습니다. 앱이 다시 시작됩니다.", "Update installed. The app will restart."))
                 : new UpdateApplyResult(UpdateApplyOutcome.StagedForNextLaunch,
-                    "업데이트를 설치했습니다. 다음 실행 때 새 버전으로 시작합니다.");
+                    L.T("업데이트를 설치했습니다. 다음 실행 때 새 버전으로 시작합니다.", "Update installed. The new version starts next time."));
         }
         catch (Exception ex)
         {
-            return new UpdateApplyResult(UpdateApplyOutcome.Failed, $"업데이트 설치에 실패했습니다: {ex.Message}");
+            return new UpdateApplyResult(UpdateApplyOutcome.Failed, L.T($"업데이트 설치에 실패했습니다: {ex.Message}", $"Update install failed: {ex.Message}"));
         }
     }
 
@@ -333,8 +338,9 @@ public sealed class UpdateService
         // 0x80073D02 — the package's files are in use. The ordinary outcome of a self-update, and
         // the one case where the user needs to be told which button to press instead.
         if (hr == 0x80073D02)
-            return "실행 중인 파일 때문에 지금 설치할 수 없습니다. '설치 후 다시 시작'을 사용하세요.";
-        return $"업데이트 설치에 실패했습니다 (0x{hr:X8}): {detail}";
+            return L.T("실행 중인 파일 때문에 지금 설치할 수 없습니다. '설치 후 다시 시작'을 사용하세요.",
+                "Files in use prevent installing now. Use 'Install and restart'.");
+        return L.T($"업데이트 설치에 실패했습니다 (0x{hr:X8}): {detail}", $"Update install failed (0x{hr:X8}): {detail}");
     }
 
     /// <summary>
@@ -389,7 +395,7 @@ public sealed class UpdateService
         }
         catch (Exception ex)
         {
-            return new UpdateApplyResult(UpdateApplyOutcome.Failed, $"업데이트를 내려받지 못했습니다: {ex.Message}");
+            return new UpdateApplyResult(UpdateApplyOutcome.Failed, L.T($"업데이트를 내려받지 못했습니다: {ex.Message}", $"Could not download the update: {ex.Message}"));
         }
 
         try
@@ -398,11 +404,11 @@ public sealed class UpdateService
         }
         catch (Exception ex)
         {
-            return new UpdateApplyResult(UpdateApplyOutcome.Failed, $"업데이트를 시작하지 못했습니다: {ex.Message}");
+            return new UpdateApplyResult(UpdateApplyOutcome.Failed, L.T($"업데이트를 시작하지 못했습니다: {ex.Message}", $"Could not start the update: {ex.Message}"));
         }
 
         return new UpdateApplyResult(UpdateApplyOutcome.Restarting,
-            "업데이트를 적용합니다. 프로그램이 잠시 후 다시 시작됩니다.");
+            L.T("업데이트를 적용합니다. 프로그램이 잠시 후 다시 시작됩니다.", "Applying the update. The program will restart shortly."));
     }
 
     private static HttpClient CreateClient()

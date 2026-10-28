@@ -1,0 +1,22 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Production</title>
+<link rel="stylesheet" href="style.css"><script src="demo.js"></script></head><body>
+<header><h1><span class="live"></span>Production<small>Plant 1 · Line A</small></h1><div class="clock"></div></header>
+<div class="row kpis">
+  <div class="panel kpi"><h2>Output today</h2><div class="v">12,480</div><div class="d up">▲ 4.2% vs yesterday</div></div>
+  <div class="panel kpi"><h2>Equipment uptime</h2><div class="v">93.6%</div><div class="d up">▲ 1.1 pts</div></div>
+  <div class="panel kpi"><h2>Defect rate</h2><div class="v">0.42%</div><div class="d up">▼ 0.08 pts</div></div>
+  <div class="panel kpi"><h2>Target attainment</h2><div class="v">87%</div><div class="d down">▼ 2.3% behind plan</div></div>
+</div>
+<div class="row grow" style="grid-template-columns: 2fr 1fr;">
+  <div class="panel" style="display:flex;flex-direction:column"><h2>Hourly output</h2><div id="bars" class="grow"></div></div>
+  <div class="panel"><h2>Progress by line</h2>
+    <table><tr><th>Line</th><th style="width:55%">Progress</th><th>Status</th></tr>
+      <tr><td>A-1</td><td><div class="bar"><i style="width:92%;background:var(--b)"></i></div></td><td><span class="tag ok">Normal</span></td></tr>
+      <tr><td>A-2</td><td><div class="bar"><i style="width:78%;background:var(--a)"></i></div></td><td><span class="tag ok">Normal</span></td></tr>
+      <tr><td>A-3</td><td><div class="bar"><i style="width:54%;background:var(--c)"></i></div></td><td><span class="tag warn">Service</span></td></tr>
+      <tr><td>A-4</td><td><div class="bar"><i style="width:88%;background:var(--b)"></i></div></td><td><span class="tag ok">Normal</span></td></tr>
+      <tr><td>A-5</td><td><div class="bar"><i style="width:31%;background:var(--d)"></i></div></td><td><span class="tag bad">Stopped</span></td></tr>
+    </table></div>
+</div>
+<script>barChart(document.getElementById('bars'), series(7, 16, 780, 160).map(v => Math.abs(v)), ['#4c8dff', '#4c8dff', '#2ec4a6'], { h: 420 });</script>
+</body></html>

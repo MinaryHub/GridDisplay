@@ -1,0 +1,18 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Equipment alarms</title>
+<link rel="stylesheet" href="style.css"><script src="demo.js"></script></head><body>
+<header><h1><span class="live"></span>Equipment alarms<small>Recent events</small></h1><div class="clock"></div></header>
+<div class="row" style="grid-template-columns: repeat(3, 1fr);">
+  <div class="panel kpi"><h2>Critical</h2><div class="v" style="color:var(--d)">1</div></div>
+  <div class="panel kpi"><h2>Warning</h2><div class="v" style="color:var(--c)">4</div></div>
+  <div class="panel kpi"><h2>Cleared</h2><div class="v" style="color:var(--b)">27</div></div>
+</div>
+<div class="panel grow"><h2>Event log</h2>
+  <table><tr><th>Time</th><th>Equipment</th><th>Event</th><th>Severity</th></tr>
+    <tr><td>13:58:12</td><td>A-5 Press</td><td>Hydraulic pressure low — auto stop</td><td><span class="tag bad">Critical</span></td></tr>
+    <tr><td>13:41:07</td><td>A-3 Conveyor</td><td>Motor temperature rising (78°C)</td><td><span class="tag warn">Warning</span></td></tr>
+    <tr><td>13:22:45</td><td>B-1 Paint booth</td><td>Filter replacement due</td><td><span class="tag warn">Warning</span></td></tr>
+    <tr><td>12:59:30</td><td>A-2 Robot arm</td><td>Communication delay recovered</td><td><span class="tag ok">Cleared</span></td></tr>
+    <tr><td>12:31:02</td><td>C-4 Chiller</td><td>Low coolant flow</td><td><span class="tag warn">Warning</span></td></tr>
+    <tr><td>12:10:18</td><td>A-1 Inspection unit</td><td>Sensor recalibration complete</td><td><span class="tag ok">Cleared</span></td></tr>
+  </table></div>
+</body></html>

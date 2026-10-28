@@ -10,6 +10,10 @@ internal static class Program
     {
         ApplicationConfiguration.Initialize();
 
+        // Before anything builds a caption, the update applier included: it reports in the UI
+        // language too.
+        L.UseSavedSetting(SetStore.SettingsPath);
+
         // Which set this copy should open. A wall that runs several copies gives each shortcut
         // its own set; without it the copy reopens whatever it had last.
         RequestedSet = ReadSetArgument(args);

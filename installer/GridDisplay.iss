@@ -5,6 +5,10 @@
 ;
 ; This file must stay UTF-8 **with BOM** — Inno reads a BOM-less .iss as ANSI and every
 ; Korean string in it comes out as mojibake, the same trap as tools\release.ps1.
+;
+; Bilingual: the wizard follows the Windows UI language (Korean on Korean Windows, English
+; otherwise). Every string of our own lives in [CustomMessages] as an english./korean. pair;
+; the sections reference them as {cm:Name} and [Code] as CustomMessage('Name').
 
 #ifndef AppVersion
   #define AppVersion "1.0.0"
@@ -58,12 +62,37 @@ SetupIconFile={#SourcePath}\..\packaging\Assets\GridDisplay.ico
 CloseApplications=yes
 RestartApplications=no
 
+; No language picker: the wizard takes the Windows UI language, and any language not listed
+; in [Languages] falls back to the first entry, English.
+ShowLanguageDialog=no
+LanguageDetectionMethod=uilanguage
+
 [Languages]
+; English first: it is the fallback for every UI language not listed here.
+Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
+
+[CustomMessages]
+english.StartupTask=Start automatically when Windows starts
+korean.StartupTask=Windows 시작 시 자동으로 실행
+english.AdditionalOptions=Additional options:
+korean.AdditionalOptions=추가 옵션:
+english.WebView2Needed=Microsoft Edge WebView2 Runtime — required for browser cells
+korean.WebView2Needed=Microsoft Edge WebView2 런타임 — 브라우저 칸에 필요합니다
+english.MissingIntro=This program needs the following, which could not be found.
+korean.MissingIntro=이 프로그램을 실행하려면 다음이 필요한데, 찾지 못했습니다.
+english.MissingLater=You can continue now and install the items above later.
+korean.MissingLater=지금 설치를 계속하고 위 항목은 나중에 설치해도 됩니다.
+english.MissingContinue=Continue?
+korean.MissingContinue=계속할까요?
+english.DeleteDataPrompt=Also delete your sets and saved browser sign-ins?
+korean.DeleteDataPrompt=세트 구성과 브라우저 로그인 정보도 함께 지울까요?
+english.DeleteDataKeepHint=Choose "No" and they will be restored as they were if you install again.
+korean.DeleteDataKeepHint="아니요"를 고르면 다시 설치할 때 그대로 복원됩니다.
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
-Name: "startup"; Description: "Windows 시작 시 자동으로 실행"; GroupDescription: "추가 옵션:"; Flags: unchecked
+Name: "startup"; Description: "{cm:StartupTask}"; GroupDescription: "{cm:AdditionalOptions}"; Flags: unchecked
 
 [Files]
 ; The XML files beside the WebView2 assemblies are IntelliSense documentation, never loaded at
@@ -163,7 +192,7 @@ begin
                '      https://dotnet.microsoft.com/download/dotnet/8.0' + #13#10#13#10;
 
   if not HasWebView2() then
-    Missing := Missing + '  · Microsoft Edge WebView2 런타임 — 브라우저 칸에 필요합니다' + #13#10 +
+    Missing := Missing + '  · ' + CustomMessage('WebView2Needed') + #13#10 +
                '      https://developer.microsoft.com/microsoft-edge/webview2/' + #13#10#13#10;
 
   if Missing = '' then
@@ -173,10 +202,10 @@ begin
   end;
 
   Result := MsgBox(
-    '이 프로그램을 실행하려면 다음이 필요한데, 찾지 못했습니다.' + #13#10#13#10 +
+    CustomMessage('MissingIntro') + #13#10#13#10 +
     Missing +
-    '지금 설치를 계속하고 위 항목은 나중에 설치해도 됩니다.' + #13#10 +
-    '계속할까요?',
+    CustomMessage('MissingLater') + #13#10 +
+    CustomMessage('MissingContinue'),
     mbConfirmation, MB_YESNO) = IDYES;
 end;
 
@@ -198,8 +227,8 @@ begin
   if not (DirExists(Roaming) or DirExists(Local)) then
     Exit;
 
-  if MsgBox('세트 구성과 브라우저 로그인 정보도 함께 지울까요?' + #13#10#13#10 +
-            '"아니요"를 고르면 다시 설치할 때 그대로 복원됩니다.',
+  if MsgBox(CustomMessage('DeleteDataPrompt') + #13#10#13#10 +
+            CustomMessage('DeleteDataKeepHint'),
             mbConfirmation, MB_YESNO) = IDYES then
   begin
     DelTree(Roaming, True, True, True);

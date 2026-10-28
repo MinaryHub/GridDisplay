@@ -59,7 +59,7 @@ public static class HookDiagnostics
             _lastWriteUtc = now;
         }
 
-        Write($"느린 입력 후크 {ms:F1}ms ({what}) · 누적 느림 {_slow}회 / 표본 {_samples}회 · 최대 {_worstMs:F1}ms ({_worstWhat})");
+        Write($"slow input hook {ms:F1}ms ({what}) · slow so far {_slow} / samples {_samples} · max {_worstMs:F1}ms ({_worstWhat})");
     }
 
     /// <summary>Called on shutdown so a quiet run still leaves its worst case behind.</summary>
@@ -77,7 +77,7 @@ public static class HookDiagnostics
         }
 
         if (samples == 0) return;
-        Write($"종료 요약 · 표본 {samples}회 · 느림({SlowMilliseconds}ms 초과) {slow}회 · 최대 {worst:F1}ms ({worstWhat})");
+        Write($"shutdown summary · samples {samples} · slow (over {SlowMilliseconds}ms) {slow} · max {worst:F1}ms ({worstWhat})");
     }
 
     private static void Write(string message)

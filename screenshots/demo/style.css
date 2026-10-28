@@ -1,0 +1,34 @@
+/* Demo dashboards shown in the cells for store screenshots. Fictional data only. */
+:root {
+  --bg: #0f1420; --panel: #171e2e; --line: #26304a; --text: #e6ebf5; --muted: #8a96b2;
+  --a: #4c8dff; --b: #2ec4a6; --c: #ffb547; --d: #ff6b6b; --e: #a78bfa;
+}
+* { box-sizing: border-box; margin: 0; }
+html, body { height: 100%; }
+body {
+  background: var(--bg); color: var(--text);
+  font: 22px/1.4 "Segoe UI", "Malgun Gothic", sans-serif;
+  padding: 36px 44px; display: flex; flex-direction: column; gap: 28px; overflow: hidden;
+}
+header { display: flex; align-items: baseline; justify-content: space-between; }
+h1 { font-size: 46px; font-weight: 600; letter-spacing: -0.5px; }
+h1 small { font-size: 24px; color: var(--muted); font-weight: 400; margin-left: 16px; }
+.clock { font-size: 30px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.live { display: inline-block; width: 14px; height: 14px; border-radius: 50%; background: var(--b);
+  margin-right: 10px; box-shadow: 0 0 12px var(--b); }
+.row { display: grid; gap: 28px; }
+.kpis { grid-template-columns: repeat(4, 1fr); }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 26px 30px; min-height: 0; }
+.panel h2 { font-size: 24px; font-weight: 500; color: var(--muted); margin-bottom: 14px; }
+.kpi .v { font-size: 64px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.kpi .d { font-size: 22px; margin-top: 4px; }
+.up { color: var(--b); } .down { color: var(--d); }
+.grow { flex: 1; min-height: 0; }
+svg { width: 100%; height: 100%; display: block; }
+table { width: 100%; border-collapse: collapse; font-size: 24px; }
+th { text-align: left; color: var(--muted); font-weight: 500; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+td { padding: 14px 12px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+.tag { padding: 4px 14px; border-radius: 999px; font-size: 20px; }
+.ok { background: #1d3b35; color: var(--b); } .warn { background: #43361c; color: var(--c); } .bad { background: #472328; color: var(--d); }
+.bar { height: 14px; border-radius: 7px; background: var(--line); overflow: hidden; }
+.bar i { display: block; height: 100%; border-radius: 7px; }
