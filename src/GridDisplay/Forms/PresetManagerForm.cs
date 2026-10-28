@@ -54,7 +54,17 @@ public sealed class PresetManagerForm : Form
             Button("새로 만들기", S(264), S(12), (_, _) => AddPreset()),
             Button("복제", S(264), S(46), (_, _) => DuplicatePreset()),
             Button("삭제", S(264), S(80), (_, _) => DeletePreset()),
+            Button("▲ 위로", S(264), S(130), (_, _) => MovePreset(-1)),
+            Button("▼ 아래로", S(264), S(164), (_, _) => MovePreset(+1)),
         });
+
+        // Alt+Up/Down moves the selected set without leaving the list.
+        _list.KeyDown += (_, e) =>
+        {
+            if (!e.Alt || (e.KeyCode != Keys.Up && e.KeyCode != Keys.Down)) return;
+            MovePreset(e.KeyCode == Keys.Up ? -1 : +1);
+            e.Handled = e.SuppressKeyPress = true;
+        };
 
         Controls.Add(new Label { Text = "이름", Bounds = new Rectangle(S(400), S(15), S(40), S(20)) });
         _name.Bounds = new Rectangle(S(444), S(12), S(164), S(23));
@@ -239,6 +249,15 @@ public sealed class PresetManagerForm : Form
         var copy = p.Duplicate(p.Name + " 사본");
         _store.Add(copy);
         Refill(copy.Id);
+    }
+
+    private void MovePreset(int delta)
+    {
+        FlushResize();
+        var p = Selected;
+        if (p is null) return;
+        if (_store.Move(p, delta)) Refill(p.Id);
+        _list.Focus();
     }
 
     private void DeletePreset()

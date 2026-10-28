@@ -146,6 +146,13 @@ public sealed class GridPreset
     public int Rows { get; set; } = 2;
     public List<CellConfig> Cells { get; set; } = new();
 
+    /// <summary>
+    /// Position in the set list, 1-based. Lives in the set's own file rather than settings.json
+    /// for the same reason the sets are split up. 0 is a file written before sets could be
+    /// reordered; those tie and fall back to name order, which is how they used to be listed.
+    /// </summary>
+    public int Order { get; set; }
+
     public int CellCount => Math.Max(1, Columns) * Math.Max(1, Rows);
 
     /// <summary>Grow/shrink the cell list, keeping every cell at its original (row, column).</summary>
