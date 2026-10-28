@@ -1,7 +1,7 @@
 ﻿{
-    "version":  "1.0.12",
-    "url":  "https://github.com/knoxxr/GridDisplay/releases/download/v1.0.12/GridDisplay-1.0.12.zip",
-    "sha256":  "376B04EDA952B7794D367C4E60AEE9A2B7835E36C5BE8A6773D4D602B584D9D4",
-    "notes":  "격자는 정지 화면(자원 절약)·크게 보면 실시간, 클릭하면 바로 입력·Esc로 복귀, 확대 화면 ✕ 버튼, 도구 모음(F1)·F2 제거, 우클릭 메뉴로 세트 바꾸기, 메뉴 밖 클릭/Esc로 닫기",
-    "published":  "2026-10-22"
+    "version":  "1.0.13",
+    "url":  "https://github.com/knoxxr/GridDisplay/releases/download/v1.0.13/GridDisplay-1.0.13.zip",
+    "sha256":  "F01ECAD2AC4D95673476D207CAEAF49BE048942171BEABDE7E5EE386DDCBA655",
+    "notes":  "세트 관리에서 세트 순서를 옮길 수 있습니다 (위로/아래로 버튼, Alt+↑/↓)",
+    "published":  "2026-10-28"
 }
