@@ -1,6 +1,6 @@
 ﻿{
     "version":  "1.0.13",
-    "url":  "https://github.com/knoxxr/GridDisplay/releases/download/v1.0.13/GridDisplay-1.0.13.zip",
+    "url":  "https://github.com/MinaryHub/GridDisplay/releases/download/v1.0.13/GridDisplay-1.0.13.zip",
     "sha256":  "F01ECAD2AC4D95673476D207CAEAF49BE048942171BEABDE7E5EE386DDCBA655",
     "notes":  "세트 관리에서 세트 순서를 옮길 수 있습니다 (위로/아래로 버튼, Alt+↑/↓)",
     "published":  "2026-10-28"

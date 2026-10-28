@@ -6,7 +6,7 @@
     Stamps the version into GridDisplay.csproj, publishes, zips the output, hashes it and
     writes latest.json. With -Publish it also creates the GitHub release and uploads both
     assets, which is what makes the running copies see the update: the app's default feed is
-    https://github.com/knoxxr/GridDisplay/releases/latest/download/latest.json, and that path
+    https://github.com/MinaryHub/GridDisplay/releases/latest/download/latest.json, and that path
     always redirects to the newest release's asset of that name.
 
 .EXAMPLE
@@ -68,7 +68,7 @@ $size = (Get-Item $zipPath).Length
 # --- manifest --------------------------------------------------------------
 $manifest = [ordered]@{
     version   = $Version
-    url       = "https://github.com/knoxxr/GridDisplay/releases/download/$tag/$zipName"
+    url       = "https://github.com/MinaryHub/GridDisplay/releases/download/$tag/$zipName"
     sha256    = $hash
     notes     = $Notes
     published = (Get-Date).ToString('yyyy-MM-dd')

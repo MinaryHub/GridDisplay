@@ -19,7 +19,7 @@
 #define AppName "Grid Display"
 #define AppExeName "GridDisplay.exe"
 #define AppPublisher "SMIC"
-#define AppUrl "https://github.com/knoxxr/GridDisplay"
+#define AppUrl "https://github.com/MinaryHub/GridDisplay"
 
 [Setup]
 ; Must never change: it is what marks a later run as an upgrade rather than a second install.

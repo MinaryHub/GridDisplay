@@ -19,7 +19,7 @@
 
 - **Microsoft Store** — 설치와 업데이트를 Store가 관리합니다. 런타임이 패키지에 들어 있어 사전 준비가 없습니다.
 - **MSIX 사이드로딩** — 사내 서버나 공유 폴더에서 배포하는 방식입니다. `.appinstaller`를 실행하면 이후 새 버전을 앱이 스스로 가져옵니다.
-- **설치 프로그램(.exe)** — [Releases](https://github.com/knoxxr/GridDisplay/releases)의
+- **설치 프로그램(.exe)** — [Releases](https://github.com/MinaryHub/GridDisplay/releases)의
   `GridDisplay-Setup-x.y.z.exe`를 실행합니다. 관리자 권한이 필요 없고, 이후 새 버전은 앱이 직접
   받아 스스로 교체합니다. MSIX를 쓰기 어려운 환경을 위한 경로입니다.
 
