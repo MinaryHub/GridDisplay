@@ -1,0 +1,18 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>설비 알람</title>
+<link rel="stylesheet" href="../style.css"><script src="../demo.js"></script></head><body>
+<header><h1><span class="live"></span>설비 알람<small>최근 이벤트</small></h1><div class="clock"></div></header>
+<div class="row" style="grid-template-columns: repeat(3, 1fr);">
+  <div class="panel kpi"><h2>위험</h2><div class="v" style="color:var(--d)">1</div></div>
+  <div class="panel kpi"><h2>주의</h2><div class="v" style="color:var(--c)">4</div></div>
+  <div class="panel kpi"><h2>해제</h2><div class="v" style="color:var(--b)">27</div></div>
+</div>
+<div class="panel grow"><h2>이벤트 기록</h2>
+  <table><tr><th>시각</th><th>설비</th><th>내용</th><th>등급</th></tr>
+    <tr><td>13:58:12</td><td>A-5 프레스</td><td>유압 압력 저하 — 자동 정지</td><td><span class="tag bad">위험</span></td></tr>
+    <tr><td>13:41:07</td><td>A-3 컨베이어</td><td>모터 온도 상승 (78°C)</td><td><span class="tag warn">주의</span></td></tr>
+    <tr><td>13:22:45</td><td>B-1 도장기</td><td>필터 교체 주기 도래</td><td><span class="tag warn">주의</span></td></tr>
+    <tr><td>12:59:30</td><td>A-2 로봇암</td><td>통신 지연 복구</td><td><span class="tag ok">해제</span></td></tr>
+    <tr><td>12:31:02</td><td>C-4 냉각기</td><td>냉각수 유량 부족</td><td><span class="tag warn">주의</span></td></tr>
+    <tr><td>12:10:18</td><td>A-1 검사기</td><td>센서 재보정 완료</td><td><span class="tag ok">해제</span></td></tr>
+  </table></div>
+</body></html>

@@ -1,0 +1,25 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>매출 대시보드</title>
+<link rel="stylesheet" href="../style.css"><script src="../demo.js"></script></head><body>
+<header><h1><span class="live"></span>매출 대시보드<small>이번 달 누계</small></h1><div class="clock"></div></header>
+<div class="row kpis">
+  <div class="panel kpi"><h2>매출</h2><div class="v">₩4.82억</div><div class="d up">▲ 12.4%</div></div>
+  <div class="panel kpi"><h2>주문 수</h2><div class="v">18,302</div><div class="d up">▲ 8.1%</div></div>
+  <div class="panel kpi"><h2>객단가</h2><div class="v">₩26,340</div><div class="d up">▲ 3.9%</div></div>
+  <div class="panel kpi"><h2>반품률</h2><div class="v">1.8%</div><div class="d up">▼ 0.3%p</div></div>
+</div>
+<div class="row grow" style="grid-template-columns: 2fr 1fr;">
+  <div class="panel" style="display:flex;flex-direction:column"><h2>일별 매출 추이</h2><div id="l" class="grow"></div></div>
+  <div class="panel" style="display:flex;gap:30px;align-items:center">
+    <div id="d" style="width:46%;aspect-ratio:1"></div>
+    <div style="font-size:26px;line-height:2.1">
+      <div><span style="color:var(--a)">●</span> 온라인 46%</div>
+      <div><span style="color:var(--b)">●</span> 매장 31%</div>
+      <div><span style="color:var(--c)">●</span> 제휴 15%</div>
+      <div><span style="color:var(--e)">●</span> 기타 8%</div>
+    </div></div>
+</div>
+<script>
+lineChart(document.getElementById('l'), [{ data: series(29, 30, 1600, 180).map((v, i) => v + i * 18), color: '#4c8dff', fill: true }], { h: 420 });
+donut(document.getElementById('d'), [{ v: 46, c: '#4c8dff' }, { v: 31, c: '#2ec4a6' }, { v: 15, c: '#ffb547' }, { v: 8, c: '#a78bfa' }]);
+</script>
+</body></html>
