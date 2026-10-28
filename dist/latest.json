@@ -1,7 +1,7 @@
 ﻿{
-    "version":  "1.0.14",
-    "url":  "https://github.com/MinaryHub/GridDisplay/releases/download/v1.0.14/GridDisplay-1.0.14.zip",
-    "sha256":  "A25123BF51C24E18F0AF63D58A93EEF468D986979496CFA4B3DF4CAF0DFB0E33",
-    "notes":  "English UI: the app follows the Windows language, or pick one under 언어 / Language (applies after restart). 영어 UI 지원 — Windows 언어를 따르며 셀 메뉴 \u0027언어 / Language\u0027에서 직접 선택 가능(재시작 후 적용).",
+    "version":  "1.0.15",
+    "url":  "https://github.com/MinaryHub/GridDisplay/releases/download/v1.0.15/GridDisplay-1.0.15.zip",
+    "sha256":  "0959D64073D4CD828D8664B1900413B052F01FFA4524342DB86BBB28AC149A07",
+    "notes":  "Store screenshots in English and Korean (screenshots/en, screenshots/ko). No change to the app since 1.0.14. 스토어용 스크린샷을 영어/한국어로 분리. 앱 동작은 1.0.14와 같습니다.",
     "published":  "2026-10-28"
 }
