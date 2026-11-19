@@ -160,7 +160,9 @@ public sealed class PresetManagerForm : Form
     private void ShowSummary(GridPreset p) =>
         _summary.Text = string.Join(
             Environment.NewLine,
-            p.Cells.Select((c, i) => $"{i + 1}. {Truncate(c.DisplayName, 26)}"));
+            p.Cells.Select((c, i) => p.IsCovered(i)
+                ? $"{i + 1}. " + L.T($"↳ {p.OwnerOf(i) + 1}번과 합쳐짐", $"↳ merged into {p.OwnerOf(i) + 1}")
+                : $"{i + 1}. {Truncate(c.DisplayName, 26)}"));
 
     private static string Truncate(string s, int max) => s.Length <= max ? s : s[..(max - 1)] + "…";
 
