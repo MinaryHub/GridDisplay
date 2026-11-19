@@ -1,7 +1,7 @@
 ﻿{
-    "version":  "1.0.16",
-    "url":  "https://github.com/MinaryHub/GridDisplay/releases/download/v1.0.16/GridDisplay-1.0.16.zip",
-    "sha256":  "36FA1BFBDC36BC553F577CEF4385058CD506C273DD1CD504065A125406EF579D",
-    "notes":  "Merge and split cells, spreadsheet-style: Shift+click (or Shift+drag / Shift+arrows) to select several cells, then right-click \u003e Merge cells; right-click a merged cell \u003e Split cell. 엑셀식 셀 합치기/나누기: Shift+클릭(또는 Shift+끌기·Shift+방향키)으로 여러 칸을 고른 뒤 우클릭 \u003e 셀 합치기, 합친 칸 우클릭 \u003e 셀 나누기.",
-    "published":  "2026-11-19"
+    "version":  "1.0.17",
+    "url":  "https://github.com/MinaryHub/GridDisplay/releases/download/v1.0.17/GridDisplay-1.0.17.zip",
+    "sha256":  "4FBDBC58C0F67A4E9E17B2234C26EF676E6CFAB2A754C44D76A8BCF6FC979625",
+    "notes":  "행·열 삽입/삭제(우클릭 › 삽입/삭제), 칸 사이 틈을 끌어 열 너비·행 높이 조정(두 번 클릭: 같게). / Insert and delete rows and columns (right-click › Insert/Delete); drag the gap between cells to resize columns and rows (double-click: equal).",
+    "published":  "2026-11-20"
 }
