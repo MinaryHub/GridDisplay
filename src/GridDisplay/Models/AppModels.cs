@@ -163,7 +163,147 @@ public sealed class GridPreset
     /// </summary>
     public List<CellMerge> Merges { get; set; } = new();
 
+    /// <summary>
+    /// Relative column widths, one per column, set by dragging the gap between columns. Empty
+    /// means equal widths — the case for every file written before sizes could be dragged, and
+    /// kept empty until the user drags, so an untouched set stays exactly as it was.
+    /// </summary>
+    public List<double> ColumnWeights { get; set; } = new();
+
+    /// <summary>Relative row heights, as <see cref="ColumnWeights"/>.</summary>
+    public List<double> RowWeights { get; set; } = new();
+
     public int CellCount => Math.Max(1, Columns) * Math.Max(1, Rows);
+
+    /// <summary>
+    /// Where each column starts, as a fraction of the width the columns share: Columns + 1
+    /// values running from 0 to 1. Edges rather than widths, so laying out from them never
+    /// leaves a rounding gap.
+    /// </summary>
+    public double[] ColumnEdges() => Edges(ColumnWeights, Math.Max(1, Columns));
+
+    /// <summary>Row edges, as <see cref="ColumnEdges"/>.</summary>
+    public double[] RowEdges() => Edges(RowWeights, Math.Max(1, Rows));
+
+    private static double[] Edges(List<double> weights, int count)
+    {
+        bool usable = weights.Count == count && weights.All(w => double.IsFinite(w) && w > 0);
+        double total = usable ? weights.Sum() : count;
+        var edges = new double[count + 1];
+        for (int i = 0; i < count; i++)
+            edges[i + 1] = edges[i] + (usable ? weights[i] : 1.0) / total;
+        edges[count] = 1.0;
+        return edges;
+    }
+
+    /// <summary>
+    /// The weights in use, made concrete — dragging needs numbers to change. Equal widths come
+    /// out as all 1s.
+    /// </summary>
+    public List<double> ConcreteWeights(bool columns)
+    {
+        var edges = columns ? ColumnEdges() : RowEdges();
+        int n = edges.Length - 1;
+        return Enumerable.Range(0, n).Select(i => (edges[i + 1] - edges[i]) * n).ToList();
+    }
+
+    // ------------------------------------------------------------------ insert / delete
+
+    /// <summary>
+    /// Insert a column so it becomes column <paramref name="at"/>; what was there and to its
+    /// right moves one over. Returns, for each new position, the position it came from (-1 for
+    /// the new, empty cells), so the wall can move its running cells instead of restarting them.
+    /// A merge the new column cuts through grows to take it in, as in a spreadsheet.
+    /// </summary>
+    public int[] InsertColumn(int at)
+    {
+        int cols = Columns, rows = Rows;
+        at = Math.Clamp(at, 0, cols);
+        foreach (var m in Merges)
+        {
+            if (m.Column >= at) m.Column++;
+            else if (m.Right >= at) m.ColumnSpan++;
+        }
+        InsertWeight(ColumnWeights, cols, at);
+        return Reshape(cols + 1, rows, (r, c) => c == at ? -1 : r * cols + (c > at ? c - 1 : c));
+    }
+
+    /// <summary>Insert a row so it becomes row <paramref name="at"/>. See <see cref="InsertColumn"/>.</summary>
+    public int[] InsertRow(int at)
+    {
+        int cols = Columns, rows = Rows;
+        at = Math.Clamp(at, 0, rows);
+        foreach (var m in Merges)
+        {
+            if (m.Row >= at) m.Row++;
+            else if (m.Bottom >= at) m.RowSpan++;
+        }
+        InsertWeight(RowWeights, rows, at);
+        return Reshape(cols, rows + 1, (r, c) => r == at ? -1 : (r > at ? r - 1 : r) * cols + c);
+    }
+
+    /// <summary>
+    /// Delete column <paramref name="col"/> and whatever it held; columns to its right move
+    /// over. A merge loses that column, and one left a single cell wide and tall stops being a
+    /// merge (see <see cref="Normalize"/>). Returns the same map as <see cref="InsertColumn"/>.
+    /// </summary>
+    public int[] DeleteColumn(int col)
+    {
+        int cols = Columns, rows = Rows;
+        foreach (var m in Merges)
+        {
+            if (m.Column > col) m.Column--;
+            else if (m.Right >= col) m.ColumnSpan--;
+        }
+        Merges.RemoveAll(m => m.ColumnSpan < 1);
+        if (ColumnWeights.Count == cols) ColumnWeights.RemoveAt(col);
+        var map = Reshape(cols - 1, rows, (r, c) => r * cols + (c >= col ? c + 1 : c));
+        Normalize();
+        return map;
+    }
+
+    /// <summary>Delete row <paramref name="row"/>. See <see cref="DeleteColumn"/>.</summary>
+    public int[] DeleteRow(int row)
+    {
+        int cols = Columns, rows = Rows;
+        foreach (var m in Merges)
+        {
+            if (m.Row > row) m.Row--;
+            else if (m.Bottom >= row) m.RowSpan--;
+        }
+        Merges.RemoveAll(m => m.RowSpan < 1);
+        if (RowWeights.Count == rows) RowWeights.RemoveAt(row);
+        var map = Reshape(cols, rows - 1, (r, c) => (r >= row ? r + 1 : r) * cols + c);
+        Normalize();
+        return map;
+    }
+
+    /// <summary>A new column or row starts as wide as its neighbour, so the others only shrink.</summary>
+    private static void InsertWeight(List<double> weights, int count, int at)
+    {
+        if (weights.Count != count) return;   // equal sizes stay implicit
+        weights.Insert(at, weights[Math.Min(at, count - 1)]);
+    }
+
+    /// <summary>Rebuild <see cref="Cells"/> at a new size from a (row, column) → old position map.</summary>
+    private int[] Reshape(int cols, int rows, Func<int, int, int> oldOf)
+    {
+        var old = Cells;
+        var map = new int[cols * rows];
+        var next = new List<CellConfig>(cols * rows);
+        for (int r = 0; r < rows; r++)
+            for (int c = 0; c < cols; c++)
+            {
+                int from = oldOf(r, c);
+                if (from >= old.Count) from = -1;
+                map[r * cols + c] = from;
+                next.Add(from >= 0 ? old[from] : new CellConfig());
+            }
+        Columns = cols;
+        Rows = rows;
+        Cells = next;
+        return map;
+    }
 
     /// <summary>The merge covering position <paramref name="index"/>, if any.</summary>
     public CellMerge? MergeAt(int index)
@@ -251,6 +391,17 @@ public sealed class GridPreset
         Cells = next;
         // Positions keep their (row, column), so a merge still fits unless the shrink cut into it.
         Merges.RemoveAll(m => m.Bottom >= rows || m.Right >= columns);
+        FitWeights(ColumnWeights, columns);
+        FitWeights(RowWeights, rows);
+    }
+
+    /// <summary>Dragged sizes survive a resize: cut off with the columns, new ones as wide as the average.</summary>
+    private static void FitWeights(List<double> weights, int count)
+    {
+        if (weights.Count == 0) return;
+        double average = weights.Average();
+        if (weights.Count > count) weights.RemoveRange(count, weights.Count - count);
+        while (weights.Count < count) weights.Add(average);
     }
 
     /// <summary>Returns true when something was corrected, so the caller can write the file back.</summary>
@@ -289,6 +440,12 @@ public sealed class GridPreset
         }
         Merges = kept;
 
+        // Sizes that do not match the grid, or cannot be laid out, fall back to equal.
+        ColumnWeights ??= new List<double>();
+        RowWeights ??= new List<double>();
+        if (ColumnWeights.Count != Columns || ColumnWeights.Any(w => !double.IsFinite(w) || w <= 0)) ColumnWeights.Clear();
+        if (RowWeights.Count != Rows || RowWeights.Any(w => !double.IsFinite(w) || w <= 0)) RowWeights.Clear();
+
         SchemaVersion = Math.Max(SchemaVersion, CurrentSchemaVersion);
         return SchemaVersion != versionBefore;
     }
@@ -303,6 +460,8 @@ public sealed class GridPreset
             Rows = Rows,
             Cells = Cells.Select(c => c.Clone()).ToList(),
             Merges = Merges.Select(m => m.Clone()).ToList(),
+            ColumnWeights = ColumnWeights.ToList(),
+            RowWeights = RowWeights.ToList(),
             // Carried over, or Normalize would read the copy as an old file and clear the flags.
             SchemaVersion = SchemaVersion,
         };
