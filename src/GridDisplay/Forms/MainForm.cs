@@ -199,26 +199,11 @@ public sealed class MainForm : Form
         _hover = -1;
 
         SuspendLayout();
-        foreach (var cell in _cells)
-        {
-            cell.StateChanged -= OnCellStateChanged;
-            cell.UserZoomed -= OnCellUserZoom;
-            cell.Release();
-            Controls.Remove(cell);
-            cell.Dispose();
-        }
+        foreach (var cell in _cells) DisposeHost(cell);
         _cells.Clear();
 
         for (int i = 0; i < preset.CellCount; i++)
-        {
-            var host = new CellHost(i, preset.Cells[i]);
-            // Never reload the cell being read or typed into; it takes the next slot instead.
-            host.RefreshAllowed = () => !_interactive && _zoomed != host.Index;
-            host.StateChanged += OnCellStateChanged;
-            host.UserZoomed += OnCellUserZoom;
-            _cells.Add(host);
-            Controls.Add(host);
-        }
+            _cells.Add(CreateHost(i, preset.Cells[i]));
         ResumeLayout(false);
 
         _selected = preset.OwnerOf(Math.Clamp(_selected, 0, Math.Max(0, _cells.Count - 1)));
@@ -243,6 +228,88 @@ public sealed class MainForm : Form
 
         try { await Task.WhenAll(pending).ConfigureAwait(true); }
         catch { /* per-cell failures are reported inside the cell */ }
+    }
+
+    /// <summary>A host for position <paramref name="index"/>, wired up and on the form but not started.</summary>
+    private CellHost CreateHost(int index, CellConfig config)
+    {
+        var host = new CellHost(index, config);
+        // Never reload the cell being read or typed into; it takes the next slot instead.
+        host.RefreshAllowed = () => !_interactive && _zoomed != host.Index;
+        host.StateChanged += OnCellStateChanged;
+        host.UserZoomed += OnCellUserZoom;
+        Controls.Add(host);
+        return host;
+    }
+
+    private void DisposeHost(CellHost host)
+    {
+        host.StateChanged -= OnCellStateChanged;
+        host.UserZoomed -= OnCellUserZoom;
+        host.Release();
+        Controls.Remove(host);
+        host.Dispose();
+    }
+
+    /// <summary>
+    /// Bring the hosts in line with a set whose rows or columns were just inserted or deleted.
+    /// <paramref name="map"/> gives, for each new position, the position it came from (-1 for a
+    /// new one) — the hosts move with their content, so a page that only changed place is not
+    /// reloaded, the same trade zooming and drag-swapping make. Only what changed starts or stops:
+    /// new cells, deleted ones, and cells a changed merge newly hides or uncovers.
+    /// </summary>
+    private async Task RebuildCellsAsync(int[] map, bool[] wasCovered)
+    {
+        var old = _cells.ToList();
+        var kept = new bool[old.Count];
+        int oldSelected = _selected;
+
+        SuspendLayout();
+        _cells.Clear();
+        var start = new List<int>();
+        for (int i = 0; i < map.Length; i++)
+        {
+            int from = map[i];
+            CellHost host;
+            if (from >= 0 && from < old.Count)
+            {
+                host = old[from];
+                kept[from] = true;
+                host.Index = i;
+                if (wasCovered[from] && !_preset.IsCovered(i)) start.Add(i);
+            }
+            else
+            {
+                host = CreateHost(i, _preset.Cells[i]);
+                if (!_preset.IsCovered(i)) start.Add(i);
+            }
+            if (_preset.IsCovered(i) && !(from >= 0 && from < old.Count && wasCovered[from])) host.Park();
+            _cells.Add(host);
+        }
+        for (int i = 0; i < old.Count; i++)
+            if (!kept[i]) DisposeHost(old[i]);
+        ResumeLayout(false);
+
+        int moved = Array.IndexOf(map, oldSelected);
+        _selected = _preset.OwnerOf(Math.Clamp(moved >= 0 ? moved : oldSelected, 0, _cells.Count - 1));
+        _hover = -1;
+        ClearRange();
+        _store.SaveSet(_preset);
+        Relayout();
+        Invalidate();
+        UpdateTitle();
+
+        foreach (int i in start)
+        {
+            try
+            {
+                var applying = _cells[i].ApplyAsync(_preset.Cells[i]);
+                ApplyPresentation();
+                await Task.Delay(120).ConfigureAwait(true);
+                await applying.ConfigureAwait(true);
+            }
+            catch { /* a cell that fails reports it itself */ }
+        }
     }
 
     private void OnCellStateChanged(CellHost cell)
@@ -313,7 +380,14 @@ public sealed class MainForm : Form
             int cols = _preset.Columns, rows = _preset.Rows;
             int innerW = Math.Max(0, area.Width - gap * (cols + 1));
             int innerH = Math.Max(0, area.Height - gap * (rows + 1));
-            _labelStrip = S.ShowCellLabels ? Math.Min(Scaled(24), innerH / rows / 3) : 0;
+            // Edges from the dragged sizes, rounded once each, so neighbouring cells always meet.
+            var colEdges = _preset.ColumnEdges();
+            var rowEdges = _preset.RowEdges();
+            var colX = colEdges.Select(f => (int)Math.Round(innerW * f)).ToArray();
+            var rowY = rowEdges.Select(f => (int)Math.Round(innerH * f)).ToArray();
+            int shortestRow = Enumerable.Range(0, rows).Min(r => rowY[r + 1] - rowY[r]);
+            _grid = new GridGeometry(area, gap, colX, rowY);
+            _labelStrip = S.ShowCellLabels ? Math.Min(Scaled(24), shortestRow / 3) : 0;
 
             for (int r = 0; r < rows; r++)
             {
@@ -335,10 +409,10 @@ public sealed class MainForm : Form
                     var merge = _preset.MergeAt(i);
                     int lastC = c + (merge?.ColumnSpan ?? 1) - 1;
                     int lastR = r + (merge?.RowSpan ?? 1) - 1;
-                    int left = area.Left + gap * (c + 1) + innerW * c / cols;
-                    int right = area.Left + gap * (lastC + 1) + innerW * (lastC + 1) / cols;
-                    int top = area.Top + gap * (r + 1) + innerH * r / rows;
-                    int bottom = area.Top + gap * (lastR + 1) + innerH * (lastR + 1) / rows;
+                    int left = area.Left + gap * (c + 1) + colX[c];
+                    int right = area.Left + gap * (lastC + 1) + colX[lastC + 1];
+                    int top = area.Top + gap * (r + 1) + rowY[r];
+                    int bottom = area.Top + gap * (lastR + 1) + rowY[lastR + 1];
                     _cells[i].Bounds = Rectangle.FromLTRB(left, top, right, bottom - _labelStrip);
                     if (!_cells[i].Visible) _cells[i].Visible = true;
                     if (S.SuspendHiddenCells) _cells[i].SetSuspended(false);
@@ -356,6 +430,164 @@ public sealed class MainForm : Form
         // Cells just moved, so the hook's cached copy is stale until this runs.
         PublishHitTestMap();
         ApplyPresentation();
+    }
+
+    // ------------------------------------------------------------------ resizing by dragging a gap
+
+    /// <summary>
+    /// Where the last grid layout put the column and row edges, in pixels inside the gaps'
+    /// share-out (<see cref="Relayout"/>'s colX/rowY). What the gap-dragging below measures against.
+    /// </summary>
+    private sealed record GridGeometry(Rectangle Area, int Gap, int[] ColX, int[] RowY)
+    {
+        /// <summary>Pixel range of the gap before column (or row) <paramref name="k"/>, k ≥ 1.</summary>
+        public (int From, int To) ColumnGap(int k) => (Area.Left + Gap * k + ColX[k], Area.Left + Gap * (k + 1) + ColX[k]);
+        public (int From, int To) RowGap(int k) => (Area.Top + Gap * k + RowY[k], Area.Top + Gap * (k + 1) + RowY[k]);
+    }
+
+    private GridGeometry? _grid;
+
+    /// <summary>
+    /// A gap being dragged: which axis, which boundary (between k-1 and k), and the sizes and
+    /// geometry as they were at the press — the pair being resized keeps its combined size, so
+    /// measuring against the starting layout stays right however far the drag goes.
+    /// </summary>
+    private bool _sizingColumns;
+    private int _sizingBoundary;
+    private List<double>? _sizingWeights;
+    private GridGeometry? _sizingFrom;
+    private long _sizingLastTicks;
+    /// <summary>Read by the hook, so hover frames do not flicker over cells the drag passes.</summary>
+    private volatile bool _sizing;
+
+    private bool CanResizeGrid => _preset is not null && _grid is not null && _zoomed < 0 && !_interactive && _cells.Count > 0;
+
+    /// <summary>The gap under a point in the form: (columns?, boundary k), or k = 0 for none.</summary>
+    private (bool Columns, int Boundary) GapAt(Point p)
+    {
+        var g = _grid;
+        if (g is null || !CanResizeGrid || !g.Area.Contains(p)) return (false, 0);
+        // A little slack either side, so a narrow gap is still easy to catch.
+        int slack = Scaled(3);
+        for (int k = 1; k < _preset.Columns; k++)
+        {
+            var (from, to) = g.ColumnGap(k);
+            if (p.X >= from - slack && p.X < to + slack) return (true, k);
+        }
+        for (int k = 1; k < _preset.Rows; k++)
+        {
+            var (from, to) = g.RowGap(k);
+            if (p.Y >= from - slack && p.Y < to + slack) return (false, k);
+        }
+        return (false, 0);
+    }
+
+    protected override void OnMouseMove(MouseEventArgs e)
+    {
+        base.OnMouseMove(e);
+
+        if (_sizing)
+        {
+            DragGap(e.Location, final: false);
+            return;
+        }
+
+        var (columns, k) = GapAt(e.Location);
+        Cursor = k == 0 ? Cursors.Default : columns ? Cursors.VSplit : Cursors.HSplit;
+    }
+
+    protected override void OnMouseDown(MouseEventArgs e)
+    {
+        base.OnMouseDown(e);
+        if (e.Button != MouseButtons.Left) return;
+
+        var (columns, k) = GapAt(e.Location);
+        if (k == 0) return;
+
+        _sizingColumns = columns;
+        _sizingBoundary = k;
+        _sizingWeights = _preset.ConcreteWeights(columns);
+        _sizingFrom = _grid;
+        _sizing = true;
+        ClearRange();
+    }
+
+    protected override void OnMouseUp(MouseEventArgs e)
+    {
+        base.OnMouseUp(e);
+        if (!_sizing) return;
+        DragGap(e.Location, final: true);
+        _sizing = false;
+        _sizingWeights = null;
+        _sizingFrom = null;
+        _store.SaveSet(_preset);
+    }
+
+    /// <summary>Alt+Tab or a dialog mid-drag: keep what was dragged so far rather than a half-state.</summary>
+    protected override void OnMouseCaptureChanged(EventArgs e)
+    {
+        base.OnMouseCaptureChanged(e);
+        if (!_sizing || Capture) return;
+        _sizing = false;
+        _sizingWeights = null;
+        _sizingFrom = null;
+        _store.SaveSet(_preset);
+    }
+
+    /// <summary>Double-click a gap: every column (or row) the same size again.</summary>
+    protected override void OnMouseDoubleClick(MouseEventArgs e)
+    {
+        base.OnMouseDoubleClick(e);
+        if (e.Button != MouseButtons.Left) return;
+
+        var (columns, k) = GapAt(e.Location);
+        if (k == 0) return;
+
+        _sizing = false;
+        (columns ? _preset.ColumnWeights : _preset.RowWeights).Clear();
+        _store.SaveSet(_preset);
+        Relayout();
+        Invalidate();
+        ShowBanner(columns ? L.T("열 너비를 모두 같게 했습니다", "Columns set to equal widths")
+                           : L.T("행 높이를 모두 같게 했습니다", "Rows set to equal heights"));
+    }
+
+    /// <summary>
+    /// Move the dragged boundary to the pointer. Only the two neighbours change, and they keep
+    /// their combined share, so nothing else on the wall moves. Live rather than a guide line —
+    /// the form cannot paint over hosted windows, so a line would only show in the gaps — but
+    /// throttled, since every step resizes real pages.
+    /// </summary>
+    private void DragGap(Point p, bool final)
+    {
+        if (_sizingWeights is not { } w || _sizingFrom is not { } g) return;
+        long now = Environment.TickCount64;
+        if (!final && now - _sizingLastTicks < 30) return;
+        _sizingLastTicks = now;
+
+        int k = _sizingBoundary;
+        var edges = _sizingColumns ? g.ColX : g.RowY;
+        int origin = _sizingColumns ? g.Area.Left : g.Area.Top;
+        int pos = _sizingColumns ? p.X : p.Y;
+
+        // The pointer in the gap-free coordinates edges are measured in: the middle of gap k
+        // sits at origin + gap*k + edges[k] + gap/2.
+        int b = pos - origin - g.Gap * k - g.Gap / 2;
+        int start = edges[k - 1], end = edges[k + 1];
+        int min = Scaled(60);
+        if (end - start < 2 * min) return;
+        b = Math.Clamp(b, start + min, end - min);
+
+        double f = (b - start) / (double)(end - start);
+        double pair = w[k - 1] + w[k];
+        var next = w.ToList();
+        next[k - 1] = pair * f;
+        next[k] = pair * (1 - f);
+
+        if (_sizingColumns) _preset.ColumnWeights = next;
+        else _preset.RowWeights = next;
+        Relayout();
+        Invalidate();
     }
 
     /// <summary>
@@ -639,7 +871,7 @@ public sealed class MainForm : Form
     private void OnGlobalMouseMove(Point screen, int index)
     {
         // Throttling and the hit test both happen in the hook now; this only reacts.
-        if (_interactive || _closing || _zoomed >= 0) return;
+        if (_interactive || _closing || _zoomed >= 0 || _sizing) return;
 
         // A left press that travels far enough becomes a cell drag. WinForms drag-and-drop is not
         // an option here: the hosted windows belong to other processes and consume the input
@@ -1314,6 +1546,8 @@ public sealed class MainForm : Form
         _menu.Items.Add(_mergeItem);
         _unmergeItem = new ToolStripMenuItem(L.T("셀 나누기", "Split cell"), null, (_, _) => UnmergeCell(_menuCell));
         _menu.Items.Add(_unmergeItem);
+        _menu.Items.Add(BuildInsertMenu());
+        _menu.Items.Add(BuildDeleteMenu());
         _menu.Items.Add(new ToolStripSeparator());
         _menu.Items.Add(BuildSetMenu());
         _menu.Items.Add(BuildGridSizeMenu());
@@ -1364,6 +1598,52 @@ public sealed class MainForm : Form
         return item;
     }
 
+    /// <summary>
+    /// Insert a column or row next to the cell the menu was opened over, as a spreadsheet's
+    /// Insert does. A merged cell counts from its outer edge, so "to the right" lands after all
+    /// of it. Enabling is refreshed on open — the grid may already be at its 12 limit.
+    /// </summary>
+    private ToolStripMenuItem BuildInsertMenu()
+    {
+        var item = new ToolStripMenuItem(L.T("삽입", "Insert")) { ForeColor = LabelTextColor };
+        StyleDropDown(item);
+        var left = new ToolStripMenuItem(L.T("왼쪽에 열 삽입", "Column to the left"), null, (_, _) => InsertColumn(_menuCell, after: false));
+        var right = new ToolStripMenuItem(L.T("오른쪽에 열 삽입", "Column to the right"), null, (_, _) => InsertColumn(_menuCell, after: true));
+        var above = new ToolStripMenuItem(L.T("위에 행 삽입", "Row above"), null, (_, _) => InsertRow(_menuCell, after: false));
+        var below = new ToolStripMenuItem(L.T("아래에 행 삽입", "Row below"), null, (_, _) => InsertRow(_menuCell, after: true));
+        foreach (var entry in new[] { left, right, above, below })
+        {
+            entry.ForeColor = LabelTextColor;
+            item.DropDownItems.Add(entry);
+        }
+        item.DropDownOpening += (_, _) =>
+        {
+            left.Enabled = right.Enabled = _preset.Columns < 12;
+            above.Enabled = below.Enabled = _preset.Rows < 12;
+        };
+        return item;
+    }
+
+    /// <summary>Delete the column or row the menu was opened over. Never the last one.</summary>
+    private ToolStripMenuItem BuildDeleteMenu()
+    {
+        var item = new ToolStripMenuItem(L.T("삭제", "Delete")) { ForeColor = LabelTextColor };
+        StyleDropDown(item);
+        var column = new ToolStripMenuItem(L.T("이 열 삭제", "This column"), null, (_, _) => DeleteColumn(_menuCell));
+        var row = new ToolStripMenuItem(L.T("이 행 삭제", "This row"), null, (_, _) => DeleteRow(_menuCell));
+        foreach (var entry in new[] { column, row })
+        {
+            entry.ForeColor = LabelTextColor;
+            item.DropDownItems.Add(entry);
+        }
+        item.DropDownOpening += (_, _) =>
+        {
+            column.Enabled = _preset.Columns > 1;
+            row.Enabled = _preset.Rows > 1;
+        };
+        return item;
+    }
+
     /// <summary>The keys there are, for whoever has not learned them yet.</summary>
     private ToolStripMenuItem BuildShortcutMenu()
     {
@@ -1375,6 +1655,7 @@ public sealed class MainForm : Form
                      ("Esc", L.T("격자로 돌아가기 · 메뉴 닫기", "Back to grid · close menu")),
                      (L.T("방향키", "Arrow keys"), L.T("셀 고르기", "Select a cell")),
                      (L.T("Shift+클릭 · Shift+방향키", "Shift+click · Shift+arrows"), L.T("여러 칸 고르기 (셀 합치기)", "Select several cells (to merge)")),
+                     (L.T("칸 사이 틈 끌기", "Drag a gap"), L.T("열 너비 · 행 높이 조정 (두 번 클릭: 같게)", "Resize columns · rows (double-click: equal)")),
                      ("Ctrl+1~9", L.T("세트 바꾸기", "Switch set")),
                      ("Ctrl+R", L.T("선택한 셀 새로 고침", "Reload selected cell")),
                      ("F11", L.T("전체 화면", "Full screen")),
@@ -1643,6 +1924,57 @@ public sealed class MainForm : Form
         _store.SaveSet(_preset);
         ShowBanner(L.T($"격자 {cols}×{rows}", $"Grid {cols}×{rows}"));
         _ = LoadPresetAsync(_preset);
+    }
+
+    private void InsertColumn(int index, bool after)
+    {
+        if (_preset is null || index < 0 || _preset.Columns >= 12) return;
+        var box = BoxOf(index);
+        int at = after ? box.Right + 1 : box.Left;
+        ChangeGrid(() => _preset.InsertColumn(at), L.T("열을 삽입했습니다", "Column inserted"));
+    }
+
+    private void InsertRow(int index, bool after)
+    {
+        if (_preset is null || index < 0 || _preset.Rows >= 12) return;
+        var box = BoxOf(index);
+        int at = after ? box.Bottom + 1 : box.Top;
+        ChangeGrid(() => _preset.InsertRow(at), L.T("행을 삽입했습니다", "Row inserted"));
+    }
+
+    private void DeleteColumn(int index)
+    {
+        if (_preset is null || index < 0 || _preset.Columns <= 1) return;
+        int cols = _preset.Columns, col = index % cols;
+        int lost = Enumerable.Range(0, _preset.Rows).Count(r => _preset.Cells[r * cols + col].IsConfigured);
+        if (!ConfirmDelete(lost, L.T("열 삭제", "Delete column"))) return;
+        ChangeGrid(() => _preset.DeleteColumn(col), L.T("열을 삭제했습니다", "Column deleted"));
+    }
+
+    private void DeleteRow(int index)
+    {
+        if (_preset is null || index < 0 || _preset.Rows <= 1) return;
+        int cols = _preset.Columns, row = index / cols;
+        int lost = Enumerable.Range(0, cols).Count(c => _preset.Cells[row * cols + c].IsConfigured);
+        if (!ConfirmDelete(lost, L.T("행 삭제", "Delete row"))) return;
+        ChangeGrid(() => _preset.DeleteRow(row), L.T("행을 삭제했습니다", "Row deleted"));
+    }
+
+    private bool ConfirmDelete(int configured, string title) =>
+        configured == 0 || MessageBox.Show(
+            this,
+            L.T($"설정된 셀 {configured}개가 함께 삭제됩니다.\n계속할까요?",
+                $"{configured} configured cell(s) will be deleted with it.\nContinue?"),
+            title, MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes;
+
+    /// <summary>Apply an insert or delete to the set, then move the running cells to match.</summary>
+    private void ChangeGrid(Func<int[]> change, string banner)
+    {
+        if (_zoomed >= 0) ToggleZoom(_zoomed);
+        var wasCovered = Enumerable.Range(0, _cells.Count).Select(_preset.IsCovered).ToArray();
+        var map = change();
+        ShowBanner(banner);
+        _ = RebuildCellsAsync(map, wasCovered);
     }
 
     /// <summary>Configured cells that a shrink to <paramref name="cols"/>×<paramref name="rows"/> would throw away.</summary>

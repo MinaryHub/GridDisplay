@@ -182,6 +182,20 @@ Shift+click / Shift+drag / Shift+arrows (`_range`, always grown to whole merges 
 becoming a drag-swap. `MergeRange` moves the first configured cell into an empty top-left before
 merging, rather than letting an empty cell win.
 
+**Rows and columns are inserted, deleted and resized spreadsheet-style, without reloading.**
+`GridPreset.InsertColumn`/`DeleteColumn`/`InsertRow`/`DeleteRow` rebuild `Cells` and shift or
+grow/shrink `Merges`, and return a map from each new position to the one it came from;
+`MainForm.RebuildCellsAsync` uses it to *move* the existing hosts (same trade as zooming and
+drag-swapping), and starts or parks only what the change created, deleted, hid or uncovered.
+`SetGridSize` still reloads everything — it predates this. Column widths and row heights are
+`ColumnWeights`/`RowWeights`, relative and *empty* until the user drags, so an untouched set and
+every older file mean "equal". `Relayout` lays out from `ColumnEdges()`/`RowEdges()` (fractions,
+rounded once per edge, so cells always meet) and records the result in `_grid`. The drag is the
+form's own `OnMouseDown/Move/Up`, not the hook: the gaps between cells are the one surface the
+form owns, so the hook's hit test already leaves them alone. Only the two neighbours of the
+dragged gap change, keeping their combined share, measured against the layout at the press;
+double-click resets that axis to equal. Gaps fully covered by a merged cell cannot be dragged.
+
 The drag itself goes through `InputHook`, not WinForms drag-and-drop — hosted windows belong to
 other processes and eat the input first, the same reason the hooks exist. `OnGlobalMouseMove`
 promotes a left press past `DragThreshold` into a drag; `OnGlobalMouseUp` swallows the release so
