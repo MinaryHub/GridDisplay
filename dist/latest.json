@@ -1,7 +1,7 @@
 ﻿{
-    "version":  "1.0.15",
-    "url":  "https://github.com/MinaryHub/GridDisplay/releases/download/v1.0.15/GridDisplay-1.0.15.zip",
-    "sha256":  "0959D64073D4CD828D8664B1900413B052F01FFA4524342DB86BBB28AC149A07",
-    "notes":  "Store screenshots in English and Korean (screenshots/en, screenshots/ko). No change to the app since 1.0.14. 스토어용 스크린샷을 영어/한국어로 분리. 앱 동작은 1.0.14와 같습니다.",
-    "published":  "2026-10-28"
+    "version":  "1.0.16",
+    "url":  "https://github.com/MinaryHub/GridDisplay/releases/download/v1.0.16/GridDisplay-1.0.16.zip",
+    "sha256":  "36FA1BFBDC36BC553F577CEF4385058CD506C273DD1CD504065A125406EF579D",
+    "notes":  "Merge and split cells, spreadsheet-style: Shift+click (or Shift+drag / Shift+arrows) to select several cells, then right-click \u003e Merge cells; right-click a merged cell \u003e Split cell. 엑셀식 셀 합치기/나누기: Shift+클릭(또는 Shift+끌기·Shift+방향키)으로 여러 칸을 고른 뒤 우클릭 \u003e 셀 합치기, 합친 칸 우클릭 \u003e 셀 나누기.",
+    "published":  "2026-11-19"
 }
