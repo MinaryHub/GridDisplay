@@ -155,7 +155,79 @@ public sealed class GridPreset
     /// </summary>
     public int Order { get; set; }
 
+    /// <summary>
+    /// Areas of the grid shown as one large cell, as in a spreadsheet. A merge belongs to grid
+    /// positions, not to content: <see cref="Cells"/> keeps one entry per position, the top-left
+    /// one is the cell that shows, and the rest are hidden but kept, so splitting the merge brings
+    /// back whatever they held. A file written before merges existed simply has none.
+    /// </summary>
+    public List<CellMerge> Merges { get; set; } = new();
+
     public int CellCount => Math.Max(1, Columns) * Math.Max(1, Rows);
+
+    /// <summary>The merge covering position <paramref name="index"/>, if any.</summary>
+    public CellMerge? MergeAt(int index)
+    {
+        int cols = Math.Max(1, Columns);
+        int r = index / cols, c = index % cols;
+        return Merges.FirstOrDefault(m => m.Contains(r, c));
+    }
+
+    /// <summary>The position that shows for <paramref name="index"/>: itself, or its merge's top-left.</summary>
+    public int OwnerOf(int index)
+    {
+        var m = MergeAt(index);
+        return m is null ? index : m.Row * Math.Max(1, Columns) + m.Column;
+    }
+
+    /// <summary>Hidden under a merged cell.</summary>
+    public bool IsCovered(int index) => OwnerOf(index) != index;
+
+    /// <summary>
+    /// Grow a block of positions until no merge straddles its edge, the way a spreadsheet
+    /// selection snaps to whole merged areas. Inclusive row/column bounds.
+    /// </summary>
+    public (int Top, int Left, int Bottom, int Right) ExpandToMerges(int top, int left, int bottom, int right)
+    {
+        bool grew = true;
+        while (grew)
+        {
+            grew = false;
+            foreach (var m in Merges)
+            {
+                if (m.Row > bottom || m.Bottom < top || m.Column > right || m.Right < left) continue;
+                if (m.Row < top) { top = m.Row; grew = true; }
+                if (m.Column < left) { left = m.Column; grew = true; }
+                if (m.Bottom > bottom) { bottom = m.Bottom; grew = true; }
+                if (m.Right > right) { right = m.Right; grew = true; }
+            }
+        }
+        return (top, left, bottom, right);
+    }
+
+    /// <summary>
+    /// Make one cell of the block. Merges inside it are absorbed; the caller has already grown
+    /// the block with <see cref="ExpandToMerges"/>, so none straddles the edge.
+    /// </summary>
+    public void Merge(int top, int left, int bottom, int right)
+    {
+        Merges.RemoveAll(m => m.Row >= top && m.Bottom <= bottom && m.Column >= left && m.Right <= right);
+        if (bottom == top && right == left) return;
+        Merges.Add(new CellMerge
+        {
+            Row = top,
+            Column = left,
+            RowSpan = bottom - top + 1,
+            ColumnSpan = right - left + 1,
+        });
+    }
+
+    /// <summary>Split the merge covering <paramref name="index"/>. Returns false when there was none.</summary>
+    public bool Unmerge(int index)
+    {
+        var m = MergeAt(index);
+        return m is not null && Merges.Remove(m);
+    }
 
     /// <summary>Grow/shrink the cell list, keeping every cell at its original (row, column).</summary>
     public void Resize(int columns, int rows)
@@ -177,6 +249,8 @@ public sealed class GridPreset
         Columns = columns;
         Rows = rows;
         Cells = next;
+        // Positions keep their (row, column), so a merge still fits unless the shrink cut into it.
+        Merges.RemoveAll(m => m.Bottom >= rows || m.Right >= columns);
     }
 
     /// <summary>Returns true when something was corrected, so the caller can write the file back.</summary>
@@ -201,6 +275,20 @@ public sealed class GridPreset
             if (SchemaVersion < 1) c.RememberLastUrl = false;
         }
 
+        // A merge that no longer fits the grid, covers a single position, or overlaps one kept
+        // before it (a hand-edited file) is dropped; the cells it hid simply show again.
+        Merges ??= new List<CellMerge>();
+        var kept = new List<CellMerge>();
+        foreach (var m in Merges)
+        {
+            if (m is null || m.Row < 0 || m.Column < 0 || m.RowSpan < 1 || m.ColumnSpan < 1) continue;
+            if (m.Bottom >= Rows || m.Right >= Columns) continue;
+            if (m.RowSpan * m.ColumnSpan < 2) continue;
+            if (kept.Any(k => k.Overlaps(m))) continue;
+            kept.Add(m);
+        }
+        Merges = kept;
+
         SchemaVersion = Math.Max(SchemaVersion, CurrentSchemaVersion);
         return SchemaVersion != versionBefore;
     }
@@ -214,6 +302,7 @@ public sealed class GridPreset
             Columns = Columns,
             Rows = Rows,
             Cells = Cells.Select(c => c.Clone()).ToList(),
+            Merges = Merges.Select(m => m.Clone()).ToList(),
             // Carried over, or Normalize would read the copy as an old file and clear the flags.
             SchemaVersion = SchemaVersion,
         };
@@ -226,6 +315,26 @@ public sealed class GridPreset
         p.Normalize();
         return p;
     }
+}
+
+/// <summary>A block of grid positions shown as one cell. Zero-based; spans count positions.</summary>
+public sealed class CellMerge
+{
+    public int Row { get; set; }
+    public int Column { get; set; }
+    public int RowSpan { get; set; } = 1;
+    public int ColumnSpan { get; set; } = 1;
+
+    [System.Text.Json.Serialization.JsonIgnore] public int Bottom => Row + RowSpan - 1;
+    [System.Text.Json.Serialization.JsonIgnore] public int Right => Column + ColumnSpan - 1;
+
+    public bool Contains(int row, int column) =>
+        row >= Row && row <= Bottom && column >= Column && column <= Right;
+
+    public bool Overlaps(CellMerge other) =>
+        Row <= other.Bottom && other.Row <= Bottom && Column <= other.Right && other.Column <= Right;
+
+    public CellMerge Clone() => (CellMerge)MemberwiseClone();
 }
 
 /// <summary>

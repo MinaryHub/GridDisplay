@@ -168,6 +168,20 @@ only one the cell was *sent* to (not `IsUserInitiated`) arms a single return to 
 non-login page, so a failing login costs a login screen, never a navigation loop. A two-step
 login (ID page, then password page) is not recognised.
 
+**Merged cells belong to positions, not content — spreadsheet-style.** `GridPreset.Merges` lists
+blocks of grid positions shown as one cell; `Cells` still holds one config per position. The
+top-left position is the one that shows and `Relayout` stretches it from its first column's left
+edge to its last column's right edge; the others are *covered*: invisible (so they drop out of
+`HitTestMap`), parked with `CellHost.Park`, skipped by `LoadPresetAsync`, `ApplyPresentation` and
+the daily recycle, but their configs are kept, so `UnmergeCell` brings their content back. Keeping
+merges positional is what lets every index-based path survive — a drag-swap moves content and
+leaves sizes alone, `Resize` keeps the merges that still fit — and cell numbers stay positional
+(a merged 2×2 at 2 leaves 1, 2, 4, 5, 8), like spreadsheet addresses. Selecting a block is
+Shift+click / Shift+drag / Shift+arrows (`_range`, always grown to whole merges by
+`ExpandToMerges`); the hook only reads Shift and posts, and Shift at the press is what stops it
+becoming a drag-swap. `MergeRange` moves the first configured cell into an empty top-left before
+merging, rather than letting an empty cell win.
+
 The drag itself goes through `InputHook`, not WinForms drag-and-drop — hosted windows belong to
 other processes and eat the input first, the same reason the hooks exist. `OnGlobalMouseMove`
 promotes a left press past `DragThreshold` into a drag; `OnGlobalMouseUp` swallows the release so

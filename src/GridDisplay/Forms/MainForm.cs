@@ -42,6 +42,10 @@ public sealed class MainForm : Form
     private ToolStripMenuItem _adoptUrlItem = null!;
     /// <summary>Shown only on a cell the user has zoomed with Ctrl+wheel.</summary>
     private ToolStripMenuItem _resetZoomItem = null!;
+    /// <summary>Always shown, enabled with a range selected — its caption says how to make one.</summary>
+    private ToolStripMenuItem _mergeItem = null!;
+    /// <summary>Shown only on a merged cell.</summary>
+    private ToolStripMenuItem _unmergeItem = null!;
 
     private GridPreset _preset = null!;
     private CancellationTokenSource? _applyCts;
@@ -52,6 +56,11 @@ public sealed class MainForm : Form
     private volatile int _zoomed = -1;
     private volatile int _selected;
     private volatile int _hover = -1;
+    /// <summary>
+    /// A spreadsheet-style range selection is up. The block itself lives in <see cref="_range"/>,
+    /// which only the UI thread touches; the hook needs no more than this, to give Esc to it.
+    /// </summary>
+    private volatile bool _rangeActive;
     private volatile int _dragFrom = -1;
     private volatile int _dragOver = -1;
     private volatile bool _interactive;
@@ -74,9 +83,17 @@ public sealed class MainForm : Form
     private int _pressedCell = -1;
     private Point _pressPoint;
     private MouseButtons _pressButton;
+    /// <summary>Shift was down at the press: a range selection, never a cell drag.</summary>
+    private bool _pressShift;
 
     private int _menuCell = -1;
     private bool _fullScreen;
+
+    /// <summary>
+    /// The selected block of grid positions (inclusive, row/column), always grown to whole
+    /// merged cells and always holding <see cref="_selected"/>. Null when one cell is selected.
+    /// </summary>
+    private (int Top, int Left, int Bottom, int Right)? _range;
 
     private Rectangle _restoreBounds;
     private FormWindowState _restoreState = FormWindowState.Normal;
@@ -204,7 +221,8 @@ public sealed class MainForm : Form
         }
         ResumeLayout(false);
 
-        _selected = Math.Clamp(_selected, 0, Math.Max(0, _cells.Count - 1));
+        _selected = preset.OwnerOf(Math.Clamp(_selected, 0, Math.Max(0, _cells.Count - 1)));
+        ClearRange();
         Relayout();
         Invalidate();
         UpdateTitle();
@@ -216,6 +234,8 @@ public sealed class MainForm : Form
         for (int i = 0; i < _cells.Count; i++)
         {
             if (ct.IsCancellationRequested) break;
+            // Hidden under a merged cell: kept in the set, not started.
+            if (preset.IsCovered(i)) continue;
             pending.Add(_cells[i].ApplyAsync(preset.Cells[i]));
             try { await Task.Delay(120, ct).ConfigureAwait(true); }
             catch (OperationCanceledException) { break; }
@@ -301,10 +321,24 @@ public sealed class MainForm : Form
                 {
                     int i = r * cols + c;
                     if (i >= _cells.Count) continue;
+
+                    // Under a merged cell: out of sight and out of the hit-test map, which skips
+                    // invisible cells. Its content was parked when the merge was made.
+                    if (_preset.IsCovered(i))
+                    {
+                        if (_cells[i].Visible) _cells[i].Visible = false;
+                        continue;
+                    }
+
+                    // A merged cell runs from its first column's left edge to its last column's
+                    // right edge, so the gaps it spans become part of it.
+                    var merge = _preset.MergeAt(i);
+                    int lastC = c + (merge?.ColumnSpan ?? 1) - 1;
+                    int lastR = r + (merge?.RowSpan ?? 1) - 1;
                     int left = area.Left + gap * (c + 1) + innerW * c / cols;
-                    int right = area.Left + gap * (c + 1) + innerW * (c + 1) / cols;
+                    int right = area.Left + gap * (lastC + 1) + innerW * (lastC + 1) / cols;
                     int top = area.Top + gap * (r + 1) + innerH * r / rows;
-                    int bottom = area.Top + gap * (r + 1) + innerH * (r + 1) / rows;
+                    int bottom = area.Top + gap * (lastR + 1) + innerH * (lastR + 1) / rows;
                     _cells[i].Bounds = Rectangle.FromLTRB(left, top, right, bottom - _labelStrip);
                     if (!_cells[i].Visible) _cells[i].Visible = true;
                     if (S.SuspendHiddenCells) _cells[i].SetSuspended(false);
@@ -333,6 +367,9 @@ public sealed class MainForm : Form
     {
         for (int i = 0; i < _cells.Count; i++)
         {
+            // Parked under a merged cell; there is nothing running to wake or picture.
+            if (_preset.IsCovered(i)) continue;
+
             if (_zoomed >= 0)
             {
                 if (i == _zoomed) _cells[i].SetLive(true);
@@ -380,6 +417,25 @@ public sealed class MainForm : Form
             int inflate = (int)Math.Ceiling(pen.Width / 2f);
             var r = Rectangle.Inflate(CellSlot(i), inflate, inflate);
             e.Graphics.DrawRectangle(pen, r.Left, r.Top, r.Width - 1, r.Height - 1);
+        }
+
+        // A range selection is one frame around the whole block, drawn further out than the
+        // cells' own frames so both stay readable in the gap.
+        if (_range is not null && _dragFrom < 0)
+        {
+            var block = Rectangle.Empty;
+            for (int i = 0; i < _cells.Count; i++)
+            {
+                if (!_cells[i].Visible || !InRange(i)) continue;
+                block = block.IsEmpty ? CellSlot(i) : Rectangle.Union(block, CellSlot(i));
+            }
+            if (!block.IsEmpty)
+            {
+                using var rangePen = new Pen(Color.FromArgb(150, 200, 255), 2);
+                int pad = Math.Max(3, S.CellGap / 2 + 1);
+                var r = Rectangle.Inflate(block, pad, pad);
+                e.Graphics.DrawRectangle(rangePen, r.Left, r.Top, r.Width - 1, r.Height - 1);
+            }
         }
     }
 
@@ -518,8 +574,12 @@ public sealed class MainForm : Form
         _pressedCell = index;
         _pressPoint = screen;
         _pressButton = button;
+        _pressShift = ShiftDown();
         return true;
     }
+
+    /// <summary>Read in the hook like every other modifier — see InputHook.CurrentModifiers.</summary>
+    private static bool ShiftDown() => (NativeMethods.GetAsyncKeyState(0x10) & 0x8000) != 0;   // VK_SHIFT
 
     private bool OnGlobalMouseUp(MouseButtons button, Point screen, int index)
     {
@@ -556,6 +616,14 @@ public sealed class MainForm : Form
         // window stuck to the pointer.
         if (pressed < 0) return false;
 
+        // Shift+click selects a range, as in a spreadsheet — and Shift+drag does too, since the
+        // release marks the far corner wherever it lands.
+        if (button == MouseButtons.Left && _pressShift)
+        {
+            Post(() => ExtendRangeTo(index));
+            return true;
+        }
+
         // Pressed on one cell and released on another: consume it, but do nothing.
         if (pressed != index) return true;
 
@@ -576,7 +644,7 @@ public sealed class MainForm : Form
         // A left press that travels far enough becomes a cell drag. WinForms drag-and-drop is not
         // an option here: the hosted windows belong to other processes and consume the input
         // before any managed control sees it, which is why the hooks exist in the first place.
-        if (_dragFrom < 0 && _pressedCell >= 0 && _pressButton == MouseButtons.Left &&
+        if (_dragFrom < 0 && _pressedCell >= 0 && _pressButton == MouseButtons.Left && !_pressShift &&
             _preset is not null && _pressedCell < _preset.Cells.Count &&
             _preset.Cells[_pressedCell].IsConfigured &&
             (Math.Abs(screen.X - _pressPoint.X) >= DragThreshold ||
@@ -652,6 +720,11 @@ public sealed class MainForm : Form
                     });
                     return true;
                 }
+                if (_rangeActive && _zoomed < 0)
+                {
+                    Post(ClearRange);
+                    return true;
+                }
                 if (_zoomed >= 0)
                 {
                     int z = _zoomed;
@@ -676,6 +749,16 @@ public sealed class MainForm : Form
                 Post(ToggleFullScreenByUser);
                 return true;
 
+        }
+
+        // Shift+arrows grow the range from the selected cell, as in a spreadsheet.
+        if ((key & Keys.Modifiers) == Keys.Shift &&
+            (key & Keys.KeyCode) is Keys.Left or Keys.Right or Keys.Up or Keys.Down)
+        {
+            if (_zoomed >= 0) return false;
+            var arrow = key & Keys.KeyCode;
+            Post(() => ExtendRangeBy(arrow));
+            return true;
         }
 
         if ((key & Keys.Control) == Keys.Control)
@@ -705,25 +788,200 @@ public sealed class MainForm : Form
     private void MoveSelection(Keys key)
     {
         if (_cells.Count == 0) return;
+        ClearRange();
         int cols = _preset.Columns, rows = _preset.Rows;
-        int r = _selected / cols, c = _selected % cols;
 
+        // Step off the edge of the selected cell's whole box, so a merged cell is crossed in one
+        // press, and land on whatever shows at that position.
+        var box = BoxOf(_selected);
+        int r = box.Top, c = box.Left;
         switch (key)
         {
-            case Keys.Left: c--; break;
-            case Keys.Right: c++; break;
-            case Keys.Up: r--; break;
-            case Keys.Down: r++; break;
+            case Keys.Left: c = box.Left - 1; break;
+            case Keys.Right: c = box.Right + 1; break;
+            case Keys.Up: r = box.Top - 1; break;
+            case Keys.Down: r = box.Bottom + 1; break;
         }
-        c = Math.Clamp(c, 0, cols - 1);
-        r = Math.Clamp(r, 0, rows - 1);
+        if (c < 0 || c >= cols || r < 0 || r >= rows) return;
 
-        int next = Math.Clamp(r * cols + c, 0, _cells.Count - 1);
+        int next = _preset.OwnerOf(Math.Clamp(r * cols + c, 0, _cells.Count - 1));
         if (next == _selected) return;
         int previous = _selected;
         _selected = next;
         InvalidateCellFrame(previous);
         InvalidateCellFrame(_selected);
+    }
+
+    // ------------------------------------------------------------------ range selection, merging
+
+    /// <summary>The block of positions the cell at <paramref name="index"/> occupies.</summary>
+    private (int Top, int Left, int Bottom, int Right) BoxOf(int index)
+    {
+        int cols = Math.Max(1, _preset.Columns);
+        var m = _preset.MergeAt(index);
+        if (m is not null) return (m.Row, m.Column, m.Bottom, m.Right);
+        int r = index / cols, c = index % cols;
+        return (r, c, r, c);
+    }
+
+    /// <summary>Shift+click: the block from the selected cell to <paramref name="index"/>.</summary>
+    private void ExtendRangeTo(int index)
+    {
+        if (_preset is null || index < 0 || index >= _cells.Count || _zoomed >= 0) return;
+        var a = BoxOf(_selected);
+        var b = BoxOf(index);
+        SetRange(Math.Min(a.Top, b.Top), Math.Min(a.Left, b.Left),
+                 Math.Max(a.Bottom, b.Bottom), Math.Max(a.Right, b.Right));
+    }
+
+    /// <summary>
+    /// Shift+arrow: move the edge away from the selected cell, growing the block past it or
+    /// shrinking back toward it, as a spreadsheet does. A step that snapping to a merged cell
+    /// would undo is taken again, so the key never seems to do nothing.
+    /// </summary>
+    private void ExtendRangeBy(Keys arrow)
+    {
+        if (_preset is null || _cells.Count == 0 || _zoomed >= 0) return;
+        int cols = _preset.Columns, rows = _preset.Rows;
+        var a = BoxOf(_selected);
+        var before = _range ?? a;
+        var r = before;
+
+        for (int step = 0; step < Math.Max(cols, rows); step++)
+        {
+            switch (arrow)
+            {
+                case Keys.Right: if (r.Left < a.Left) r.Left++; else r.Right++; break;
+                case Keys.Left: if (r.Right > a.Right) r.Right--; else r.Left--; break;
+                case Keys.Down: if (r.Top < a.Top) r.Top++; else r.Bottom++; break;
+                case Keys.Up: if (r.Bottom > a.Bottom) r.Bottom--; else r.Top--; break;
+            }
+            if (r.Left < 0 || r.Top < 0 || r.Right >= cols || r.Bottom >= rows) return;
+
+            var snapped = _preset.ExpandToMerges(r.Top, r.Left, r.Bottom, r.Right);
+            if (snapped != before)
+            {
+                SetRange(snapped.Top, snapped.Left, snapped.Bottom, snapped.Right);
+                return;
+            }
+        }
+    }
+
+    private void SetRange(int top, int left, int bottom, int right)
+    {
+        var block = _preset.ExpandToMerges(top, left, bottom, right);        // A block that is just the selected cell is no range at all.
+        if (block == BoxOf(_selected))
+        {
+            ClearRange();
+            return;
+        }
+        _range = block;
+        _rangeActive = true;
+        Invalidate();
+    }
+
+    private void ClearRange()
+    {
+        if (_range is null && !_rangeActive) return;
+        _range = null;
+        _rangeActive = false;
+        Invalidate();
+    }
+
+    private bool InRange(int index)
+    {
+        if (_range is not { } b) return false;
+        int cols = Math.Max(1, _preset.Columns);
+        int r = index / cols, c = index % cols;
+        return r >= b.Top && r <= b.Bottom && c >= b.Left && c <= b.Right;
+    }
+
+    /// <summary>
+    /// Make the selected block one cell, as a spreadsheet's Merge does. The top-left position is
+    /// the one that shows. If it is empty and another cell in the block has content, that content
+    /// moves into it first — a spreadsheet would keep only the top-left value, but losing a
+    /// configured cell to an empty one is never what was meant. Anything else in the block is
+    /// hidden rather than deleted, and comes back when the cell is split again.
+    /// </summary>
+    private void MergeRange()
+    {
+        if (_preset is null || _range is not { } b) return;
+        if (_zoomed >= 0) ToggleZoom(_zoomed);
+        int cols = _preset.Columns;
+        int anchor = b.Top * cols + b.Left;
+
+        // What shows in the block now, in reading order: the anchor, then the rest.
+        var shown = new List<int>();
+        for (int r = b.Top; r <= b.Bottom; r++)
+            for (int c = b.Left; c <= b.Right; c++)
+            {
+                int i = r * cols + c;
+                if (!_preset.IsCovered(i)) shown.Add(i);
+            }
+
+        // Every configured cell but one ends up hidden, whichever one that is.
+        int hidden = Math.Max(0, shown.Count(i => _preset.Cells[i].IsConfigured) - 1);
+        if (hidden > 0 && MessageBox.Show(
+                this,
+                L.T($"합치면 왼쪽 위 칸의 화면만 보입니다.\n나머지 {hidden}개 칸의 화면은 숨겨지며, 셀 나누기를 하면 다시 나타납니다.",
+                    $"Only the top-left cell's content shows after merging.\nThe other {hidden} cell(s) are hidden, and come back when you split the cell."),
+                L.T("셀 합치기", "Merge cells"), MessageBoxButtons.OKCancel, MessageBoxIcon.Information) != DialogResult.OK)
+        {
+            return;
+        }
+
+        if (!_preset.Cells[anchor].IsConfigured)
+        {
+            int donor = shown.FirstOrDefault(i => i != anchor && _preset.Cells[i].IsConfigured, -1);
+            if (donor >= 0) ExchangeHosts(anchor, donor);
+        }
+
+        _preset.Merge(b.Top, b.Left, b.Bottom, b.Right);
+        foreach (int i in shown)
+            if (i != anchor) _cells[i].Park();
+
+        _selected = anchor;
+        _hover = -1;
+        ClearRange();
+        _store.SaveSet(_preset);
+        Relayout();
+        Invalidate();
+        ShowBanner(L.T($"셀 {(b.Bottom - b.Top + 1) * (b.Right - b.Left + 1)}칸을 합쳤습니다",
+                       $"Merged {(b.Bottom - b.Top + 1) * (b.Right - b.Left + 1)} cells"));
+    }
+
+    /// <summary>Split a merged cell back into its positions and start whatever they held.</summary>
+    private async void UnmergeCell(int index)
+    {
+        if (_preset is null) return;
+        var merge = _preset.MergeAt(index);
+        if (merge is null) return;
+        if (_zoomed >= 0) ToggleZoom(_zoomed);
+
+        int cols = _preset.Columns;
+        int anchor = merge.Row * cols + merge.Column;
+        _preset.Unmerge(index);
+        _store.SaveSet(_preset);
+        ClearRange();
+        Relayout();
+        Invalidate();
+        ShowBanner(L.T("셀을 나눴습니다", "Cell split"));
+
+        // Staggered for the same reason a set starts staggered.
+        for (int r = merge.Row; r <= merge.Bottom; r++)
+            for (int c = merge.Column; c <= merge.Right; c++)
+            {
+                int i = r * cols + c;
+                if (i == anchor || i >= _cells.Count || _preset.IsCovered(i)) continue;
+                try
+                {
+                    var applying = _cells[i].ApplyAsync(_preset.Cells[i]);
+                    ApplyPresentation();
+                    await Task.Delay(120).ConfigureAwait(true);
+                    await applying.ConfigureAwait(true);
+                }
+                catch { /* a cell that fails reports it itself */ }
+            }
     }
 
     // ------------------------------------------------------------------ modes
@@ -732,6 +990,7 @@ public sealed class MainForm : Form
     {
         var cell = CellAt(index);
         if (cell is null) return;
+        ClearRange();
 
         int previous = _selected;
         _selected = index;
@@ -776,10 +1035,9 @@ public sealed class MainForm : Form
         if (_preset is null || a == b) return;
         if (a < 0 || b < 0 || a >= _cells.Count || b >= _cells.Count) return;
 
-        (_cells[a], _cells[b]) = (_cells[b], _cells[a]);
-        (_preset.Cells[a], _preset.Cells[b]) = (_preset.Cells[b], _preset.Cells[a]);
-        _cells[a].Index = a;
-        _cells[b].Index = b;
+        // Merges belong to positions, so a merged cell keeps its size and only the content moves.
+        ExchangeHosts(a, b);
+        ClearRange();
 
         _selected = b;
         _hover = -1;
@@ -788,6 +1046,18 @@ public sealed class MainForm : Form
         Invalidate();
         UpdateTitle();
         ShowBanner(L.T($"셀 {a + 1} ↔ {b + 1} 자리 교환", $"Swapped cells {a + 1} ↔ {b + 1}"));
+    }
+
+    /// <summary>
+    /// Trade two positions' hosts and configs together, keeping <c>_cells[i].Config</c> and
+    /// <c>_preset.Cells[i]</c> the same object. Nothing is laid out or saved here.
+    /// </summary>
+    private void ExchangeHosts(int a, int b)
+    {
+        (_cells[a], _cells[b]) = (_cells[b], _cells[a]);
+        (_preset.Cells[a], _preset.Cells[b]) = (_preset.Cells[b], _preset.Cells[a]);
+        _cells[a].Index = a;
+        _cells[b].Index = b;
     }
 
     private void ToggleZoom(int index)
@@ -1040,6 +1310,11 @@ public sealed class MainForm : Form
         _menu.Items.Add(_adoptUrlItem);
         _menu.Items.Add(L.T("셀 다시 시작", "Restart cell"), null, (_, _) => RestartCell(_menuCell));
         _menu.Items.Add(new ToolStripSeparator());
+        _mergeItem = new ToolStripMenuItem(L.T("셀 합치기", "Merge cells"), null, (_, _) => MergeRange());
+        _menu.Items.Add(_mergeItem);
+        _unmergeItem = new ToolStripMenuItem(L.T("셀 나누기", "Split cell"), null, (_, _) => UnmergeCell(_menuCell));
+        _menu.Items.Add(_unmergeItem);
+        _menu.Items.Add(new ToolStripSeparator());
         _menu.Items.Add(BuildSetMenu());
         _menu.Items.Add(BuildGridSizeMenu());
         _menu.Items.Add(L.T("세트 관리…", "Manage sets…"), null, (_, _) => ManagePresets());
@@ -1099,6 +1374,7 @@ public sealed class MainForm : Form
                      (L.T("클릭 · Enter", "Click · Enter"), L.T("크게 보고 바로 입력", "Zoom in and start typing")),
                      ("Esc", L.T("격자로 돌아가기 · 메뉴 닫기", "Back to grid · close menu")),
                      (L.T("방향키", "Arrow keys"), L.T("셀 고르기", "Select a cell")),
+                     (L.T("Shift+클릭 · Shift+방향키", "Shift+click · Shift+arrows"), L.T("여러 칸 고르기 (셀 합치기)", "Select several cells (to merge)")),
                      ("Ctrl+1~9", L.T("세트 바꾸기", "Switch set")),
                      ("Ctrl+R", L.T("선택한 셀 새로 고침", "Reload selected cell")),
                      ("F11", L.T("전체 화면", "Full screen")),
@@ -1216,10 +1492,22 @@ public sealed class MainForm : Form
     private void ShowCellMenu(int index, Point screen)
     {
         _menuCell = index;
-        int previous = _selected;
-        _selected = index;
-        InvalidateCellFrame(previous);
-        InvalidateCellFrame(index);
+        // Right-clicking inside the range keeps it, so it can be merged; anywhere else starts over
+        // from the cell clicked, as in a spreadsheet.
+        if (!InRange(index))
+        {
+            ClearRange();
+            int previous = _selected;
+            _selected = index;
+            InvalidateCellFrame(previous);
+            InvalidateCellFrame(index);
+        }
+
+        _mergeItem.Enabled = _range is not null;
+        _mergeItem.Text = _range is not null
+            ? L.T("셀 합치기", "Merge cells")
+            : L.T("셀 합치기  (Shift+클릭으로 여러 칸 선택)", "Merge cells  (Shift+click to select several)");
+        _unmergeItem.Available = _range is null && _preset.MergeAt(index) is not null;
         UpdateAdoptUrlItem(index);
         _labelsItem.Checked = S.ShowCellLabels;
         var menuHost = CellAt(index);
@@ -1515,6 +1803,7 @@ public sealed class MainForm : Form
         {
             if (_closing || _interactive || _zoomed >= 0) return;
             if (i >= _preset.Cells.Count || _preset.Cells[i].Kind != CellKind.Browser) continue;
+            if (_preset.IsCovered(i)) continue;
             // A cell with its own interval refreshes on that; leave it alone.
             if (_preset.Cells[i].RefreshMinutes > 0) continue;
 

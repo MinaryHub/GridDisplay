@@ -924,6 +924,18 @@ public sealed class CellHost : Panel
         catch { }
     }
 
+    /// <summary>
+    /// Stop everything for a cell hidden under a merged one. Its <see cref="Config"/> is left as
+    /// it is — the set still holds it, and splitting the merge starts it again with
+    /// <see cref="ApplyAsync"/> — so only the running content and the timers that would wake it go.
+    /// </summary>
+    public void Park()
+    {
+        Release();
+        _recoverTimer.Stop();
+        _refreshTimer.Stop();
+    }
+
     public void Release()
     {
         _keepAlive.Stop();
