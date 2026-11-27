@@ -130,7 +130,7 @@ public sealed class CellHost : Panel
             TextAlign = ContentAlignment.MiddleCenter,
             ForeColor = Color.FromArgb(140, 140, 150),
             BackColor = Color.FromArgb(24, 24, 27),
-            Font = new Font("Segoe UI", 11f, FontStyle.Regular),
+            Font = PlaceholderFont,
             Text = string.Empty,
         };
         Controls.Add(_placeholder);
@@ -194,8 +194,22 @@ public sealed class CellHost : Panel
         "＋ 이 칸에 화면 추가\n클릭하여 웹 주소나 프로그램을 넣을 수 있습니다",
         "＋ Add content to this cell\nClick to add a web address or a program");
 
-    /// <summary>Raised when the hosted content changes something worth persisting (URL, title).</summary>
+    /// <summary>Raised when the hosted content changes something worth persisting (URL, zoom).</summary>
     public event Action<CellHost>? StateChanged;
+
+    /// <summary>
+    /// Raised when the page or window title changes. Kept apart from <see cref="StateChanged"/>
+    /// because a title is shown, not saved: a page with a ticking clock or an unread counter in
+    /// its title changes it every second, and routing that through the save debounce rewrote
+    /// (and flushed to disk) the whole set once a second, all day.
+    /// </summary>
+    public event Action<CellHost>? TitleChanged;
+
+    /// <summary>Completes when the program this cell last let go of has exited; see ApplyAsync.</summary>
+    private Task _closingProgram = Task.CompletedTask;
+
+    /// <summary>One font for every cell's placeholder: a Label does not dispose an assigned font, so a per-cell one leaked a GDI handle each time a grid was rebuilt.</summary>
+    private static readonly Font PlaceholderFont = new("Segoe UI", 11f, FontStyle.Regular);
 
     /// <summary>Raised when the user zooms the page themselves, so the wall can say it was kept.</summary>
     public event Action<CellHost>? UserZoomed;
@@ -217,8 +231,11 @@ public sealed class CellHost : Panel
     /// <summary>Tear down whatever is hosted and load <paramref name="config"/> instead.</summary>
     public async Task ApplyAsync(CellConfig config)
     {
-        Config = config;
+        // Release first: it decides from Config whether to close the program being let go, and
+        // that has to be the outgoing cell's choice. Clearing a cell passes a fresh config whose
+        // CloseOnRelease defaults to true, which used to close a program set to be left running.
         Release();
+        Config = config;
 
         // Restarting a cell by hand is the operator saying "try again"; the crash count from the
         // previous content should not count against the new one.
@@ -238,6 +255,12 @@ public sealed class CellHost : Panel
 
             case CellKind.Program:
                 StatusText = L.T("프로그램 시작 중…", "Starting program…");
+                // The previous program (this cell's, if it held one) may still be closing. A
+                // single-instance app would hand this launch to that copy and exit, and the copy
+                // would then be ended — leaving nothing to find.
+                try { await _closingProgram.WaitAsync(TimeSpan.FromSeconds(3), ct).ConfigureAwait(true); }
+                catch { }
+                if (ct.IsCancellationRequested) break;
                 await StartProgramAsync(config, ct).ConfigureAwait(true);
                 break;
 
@@ -288,6 +311,11 @@ public sealed class CellHost : Panel
         }
         catch (Exception ex)
         {
+            // Cleared or re-applied while starting: the exception belongs to a view that is
+            // already gone, and its message must not land over the new content.
+            if (ct.IsCancellationRequested) return;
+            // The view was brought to the front before it started; the message has to beat it.
+            _placeholder.BringToFront();
             StatusText = L.T("WebView2 런타임을 초기화하지 못했습니다.\n" +
                              "Microsoft Edge WebView2 Runtime을 설치하세요.",
                              "Could not initialize the WebView2 runtime.\n" +
@@ -322,7 +350,7 @@ public sealed class CellHost : Panel
         core.DocumentTitleChanged += (_, _) =>
         {
             LiveTitle = core.DocumentTitle;
-            StateChanged?.Invoke(this);
+            TitleChanged?.Invoke(this);
         };
 
         core.ProcessFailed += (_, e) => OnProcessFailed(e.ProcessFailedKind);
@@ -397,7 +425,7 @@ public sealed class CellHost : Panel
         {
             StatusText = string.Empty;
             LiveTitle = NativeMethods.GetWindowTitle(host.ChildHandle);
-            StateChanged?.Invoke(this);
+            TitleChanged?.Invoke(this);
         }
     }
 
@@ -560,6 +588,12 @@ public sealed class CellHost : Panel
         // without this line "it died twice last night" is unanswerable.
         Services.HealthMonitor.Event(
             $"Cell {Index + 1} process exited ({kind}) · {Describe()}");
+
+        // GPU, utility and iframe-renderer processes are restarted by WebView2 on its own and
+        // the page carries on. They used to fall through to the fatal branch below — and since
+        // every cell shares one browser, a single GPU driver reset covered *every* cell with an
+        // error that nothing ever cleared, over pages that were working fine.
+        if (!renderer && kind != CoreWebView2ProcessFailedKind.BrowserProcessExited) return;
 
         if (!renderer)
         {
@@ -732,8 +766,9 @@ public sealed class CellHost : Panel
         }
 
         // Relayout calls in here on every resize step; once pictured there is nothing to do. A
-        // cell put to sleep behind a zoom before it was ever pictured still needs its picture.
-        if (_stillWanted && _frozen && _still.Image is not null) return;
+        // cell put to sleep behind a zoom before it was ever pictured still needs its picture,
+        // and so does one whose page was left awake behind its picture by a cut-short refresh.
+        if (_stillWanted && _frozen && _still.Image is not null && (_web is null || !_web.Visible)) return;
         _stillWanted = true;
         StartStillTimer();
         // Coming back from a zoom: the page has to settle at its new size and zoom before the
@@ -750,7 +785,11 @@ public sealed class CellHost : Panel
     {
         if (Config.Kind != CellKind.Browser || _web is null || !_webReady) return;
         _stillGen++;
-        if (!_frozen) Freeze();
+        // Unconditionally: _frozen means "the picture is on top", not "the page is asleep". A
+        // still refresh wakes the page *behind* its picture, so a zoom that lands during the
+        // settle found _frozen set, skipped this, and the refresh then bailed on the bumped
+        // generation — leaving the page running unseen. Freeze is cheap to repeat.
+        Freeze();
     }
 
     private void StartStillTimer()
@@ -963,7 +1002,7 @@ public sealed class CellHost : Panel
 
         if (_native is not null)
         {
-            _native.Release(Config.CloseOnRelease);
+            _closingProgram = _native.Release(Config.CloseOnRelease);
             Controls.Remove(_native);
             _native.Dispose();
             _native = null;

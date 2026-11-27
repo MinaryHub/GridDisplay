@@ -178,7 +178,12 @@ public sealed class PresetManagerForm : Form
         var p = Selected;
         if (p is null) return;
 
-        p.Name = string.IsNullOrWhiteSpace(_name.Text) ? p.Name : _name.Text.Trim();
+        var name = string.IsNullOrWhiteSpace(_name.Text) ? p.Name : _name.Text.Trim();
+        if (name != p.Name)
+        {
+            p.Name = name;
+            _edited.Add(p);
+        }
 
         int cols = (int)_cols.Value, rows = (int)_rows.Value;
         if (cols != p.Columns || rows != p.Rows)
@@ -231,6 +236,7 @@ public sealed class PresetManagerForm : Form
         if (_resizeCols == p.Columns && _resizeRows == p.Rows) return;
 
         p.Resize(_resizeCols, _resizeRows);
+        _edited.Add(p);
         RefreshRow(p);
         if (ReferenceEquals(p, Selected)) ShowSummary(p);
     }
@@ -284,8 +290,19 @@ public sealed class PresetManagerForm : Form
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
         FlushResize();
+
+        // Renames and resizes change the set in memory only. The main window saves the set it
+        // has open, so an edit to any *other* set used to be lost at the next restart. A set
+        // deleted after being edited is no longer listed and is skipped.
+        foreach (var p in _edited)
+            if (_store.Sets.Contains(p)) _store.SaveSet(p);
+        _edited.Clear();
+
         base.OnFormClosing(e);
     }
+
+    /// <summary>Sets renamed or resized in this dialog, written when it closes.</summary>
+    private readonly HashSet<GridPreset> _edited = new(ReferenceEqualityComparer.Instance);
 
     protected override void Dispose(bool disposing)
     {

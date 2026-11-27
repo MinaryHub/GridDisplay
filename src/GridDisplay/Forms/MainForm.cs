@@ -33,6 +33,9 @@ public sealed class MainForm : Form
     private readonly System.Windows.Forms.Timer _maintenanceTimer = new();
     private DateTime _lastHealthUtc = DateTime.UtcNow;
     private DateTime _lastRecycleUtc = DateTime.UtcNow;
+    private bool _recycling;
+    private int _recycleNext;
+    private GridPreset? _recycleSet;
     private readonly ContextMenuStrip _menu = new();
 
     /// <summary>
@@ -131,6 +134,17 @@ public sealed class MainForm : Form
         Resize += (_, _) => Relayout();
     }
 
+    /// <summary>
+    /// A move changes no size, so no Relayout runs — but the hook hit-tests in screen
+    /// coordinates, and a map left at the old position would let clicks through to the hosted
+    /// pages, or zoom the wrong cell. Windowed mode is the default, so this is a plain title-bar drag.
+    /// </summary>
+    protected override void OnMove(EventArgs e)
+    {
+        base.OnMove(e);
+        PublishHitTestMap();
+    }
+
     private AppState S => _store.Settings;
 
     /// <summary>
@@ -215,19 +229,48 @@ public sealed class MainForm : Form
 
         // Content comes up staggered: the window is already painted and clickable, and a
         // simultaneous launch of six browsers/processes would spike CPU and stall input.
+        // Hidden under a merged cell: kept in the set, not started.
+        await StartCellsAsync(preset, Enumerable.Range(0, _cells.Count), ct, presentEach: false).ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// Start <paramref name="indices"/> staggered 120ms apart, then wait for all of them.
+    ///
+    /// The work is pinned as (host, config) pairs up front, and each is checked again just before
+    /// it starts: the stagger leaves seconds in which the user can insert a column, merge, swap or
+    /// switch set. A drag-swap or an insert moves host and config together, so the pair is
+    /// still right wherever it went; a host that was disposed, parked under a merge, or belongs
+    /// to a set that is no longer open is skipped rather than started on the wrong content.
+    /// </summary>
+    private async Task StartCellsAsync(GridPreset preset, IEnumerable<int> indices, CancellationToken ct, bool presentEach)
+    {
+        var work = indices
+            .Where(i => i >= 0 && i < _cells.Count && i < preset.Cells.Count && !preset.IsCovered(i))
+            .Select(i => (Host: _cells[i], Config: preset.Cells[i]))
+            .ToList();
+
         var pending = new List<Task>();
-        for (int i = 0; i < _cells.Count; i++)
+        foreach (var (host, config) in work)
         {
             if (ct.IsCancellationRequested) break;
-            // Hidden under a merged cell: kept in the set, not started.
-            if (preset.IsCovered(i)) continue;
-            pending.Add(_cells[i].ApplyAsync(preset.Cells[i]));
+            if (!StillStartable(preset, host, config)) continue;
+            pending.Add(host.ApplyAsync(config));
+            if (presentEach) ApplyPresentation();
             try { await Task.Delay(120, ct).ConfigureAwait(true); }
             catch (OperationCanceledException) { break; }
         }
 
         try { await Task.WhenAll(pending).ConfigureAwait(true); }
         catch { /* per-cell failures are reported inside the cell */ }
+    }
+
+    private bool StillStartable(GridPreset preset, CellHost host, CellConfig config)
+    {
+        if (_closing || host.IsDisposed || !ReferenceEquals(_preset, preset)) return false;
+        int i = host.Index;
+        return i >= 0 && i < _cells.Count && i < preset.Cells.Count &&
+               ReferenceEquals(_cells[i], host) && ReferenceEquals(preset.Cells[i], config) &&
+               !preset.IsCovered(i);
     }
 
     /// <summary>A host for position <paramref name="index"/>, wired up and on the form but not started.</summary>
@@ -237,6 +280,7 @@ public sealed class MainForm : Form
         // Never reload the cell being read or typed into; it takes the next slot instead.
         host.RefreshAllowed = () => !_interactive && _zoomed != host.Index;
         host.StateChanged += OnCellStateChanged;
+        host.TitleChanged += OnCellTitleChanged;
         host.UserZoomed += OnCellUserZoom;
         Controls.Add(host);
         return host;
@@ -245,6 +289,7 @@ public sealed class MainForm : Form
     private void DisposeHost(CellHost host)
     {
         host.StateChanged -= OnCellStateChanged;
+        host.TitleChanged -= OnCellTitleChanged;
         host.UserZoomed -= OnCellUserZoom;
         host.Release();
         Controls.Remove(host);
@@ -299,17 +344,9 @@ public sealed class MainForm : Form
         Invalidate();
         UpdateTitle();
 
-        foreach (int i in start)
-        {
-            try
-            {
-                var applying = _cells[i].ApplyAsync(_preset.Cells[i]);
-                ApplyPresentation();
-                await Task.Delay(120).ConfigureAwait(true);
-                await applying.ConfigureAwait(true);
-            }
-            catch { /* a cell that fails reports it itself */ }
-        }
+        // Shares the set's token, so switching set stops it like it stops the set's own start.
+        await StartCellsAsync(_preset, start, _applyCts?.Token ?? CancellationToken.None, presentEach: true)
+            .ConfigureAwait(true);
     }
 
     private void OnCellStateChanged(CellHost cell)
@@ -318,6 +355,13 @@ public sealed class MainForm : Form
         _store.SaveSetSoon(_preset);
         if (cell.Index == _zoomed) UpdateTitle();
         // The name strip shows the page title and the zoom, both of which this reports.
+        else InvalidateCellFrame(cell.Index);
+    }
+
+    /// <summary>A title is shown, never saved — repaint only.</summary>
+    private void OnCellTitleChanged(CellHost cell)
+    {
+        if (cell.Index == _zoomed) UpdateTitle();
         else InvalidateCellFrame(cell.Index);
     }
 
@@ -357,7 +401,11 @@ public sealed class MainForm : Form
 
     private void Relayout()
     {
-        if (_cells.Count == 0 || _preset is null) return;
+        if (_cells.Count == 0 || _preset is null || _deferLayout > 0) return;
+        // Minimizing raises Resize with an empty client area. Laying out to it would drop every
+        // cell to width 0, its fit zoom to the 1.0 fallback, and reflow every page twice — once
+        // going down, once coming back. Nothing is on screen; the restore lays out again.
+        if (WindowState == FormWindowState.Minimized || ClientSize.Width <= 0 || ClientSize.Height <= 0) return;
 
         var area = GridArea();
         int gap = Math.Max(0, S.CellGap);
@@ -457,6 +505,9 @@ public sealed class MainForm : Form
     private List<double>? _sizingWeights;
     private GridGeometry? _sizingFrom;
     private long _sizingLastTicks;
+    /// <summary>Where the gap was pressed, and whether the pointer has since travelled far enough to count as a drag.</summary>
+    private Point _sizingPress;
+    private bool _sizingMoved;
     /// <summary>Read by the hook, so hover frames do not flicker over cells the drag passes.</summary>
     private volatile bool _sizing;
 
@@ -488,6 +539,12 @@ public sealed class MainForm : Form
 
         if (_sizing)
         {
+            // A click on a gap is not a resize: without this, the release would snap the boundary
+            // to the pointer and turn "equal" into concrete weights a few pixels off.
+            if (!_sizingMoved &&
+                Math.Abs(e.X - _sizingPress.X) < DragThreshold && Math.Abs(e.Y - _sizingPress.Y) < DragThreshold)
+                return;
+            _sizingMoved = true;
             DragGap(e.Location, final: false);
             return;
         }
@@ -508,6 +565,8 @@ public sealed class MainForm : Form
         _sizingBoundary = k;
         _sizingWeights = _preset.ConcreteWeights(columns);
         _sizingFrom = _grid;
+        _sizingPress = e.Location;
+        _sizingMoved = false;
         _sizing = true;
         ClearRange();
     }
@@ -516,11 +575,11 @@ public sealed class MainForm : Form
     {
         base.OnMouseUp(e);
         if (!_sizing) return;
-        DragGap(e.Location, final: true);
+        if (_sizingMoved) DragGap(e.Location, final: true);
         _sizing = false;
         _sizingWeights = null;
         _sizingFrom = null;
-        _store.SaveSet(_preset);
+        if (_sizingMoved) _store.SaveSet(_preset);
     }
 
     /// <summary>Alt+Tab or a dialog mid-drag: keep what was dragged so far rather than a half-state.</summary>
@@ -531,7 +590,7 @@ public sealed class MainForm : Form
         _sizing = false;
         _sizingWeights = null;
         _sizingFrom = null;
-        _store.SaveSet(_preset);
+        if (_sizingMoved) _store.SaveSet(_preset);
     }
 
     /// <summary>Double-click a gap: every column (or row) the same size again.</summary>
@@ -775,23 +834,56 @@ public sealed class MainForm : Form
         _formHandle = Handle;
 
         var cells = new Rectangle[_cells.Count];
+        var configured = new bool[_cells.Count];
         for (int i = 0; i < _cells.Count; i++)
+        {
             cells[i] = _cells[i].Visible ? RectangleToScreen(CellSlot(i)) : Rectangle.Empty;
+            configured[i] = _preset is not null && i < _preset.Cells.Count && _preset.Cells[i].IsConfigured;
+        }
 
         _hook.SetMap(new HitTestMap
         {
             FormHandle = Handle,
             GridBounds = RectangleToScreen(GridArea()),
             Cells = cells,
+            Configured = configured,
+            DragThreshold = DragThreshold,
             ClicksEnabled = !_closing && !_interactive && _cells.Count > 0,
             HoverEnabled = !_closing && !_interactive && _zoomed < 0 && _cells.Count > 0,
         });
     }
 
+    /// <summary>How many of our own modal dialogs are open; read by the hook (see OnGlobalMouseDown).</summary>
+    private volatile int _modal;
+
+    /// <summary>Run one of our modal dialogs. Every ShowDialog and MessageBox of the form goes through here.</summary>
+    private T RunModal<T>(Func<T> show)
+    {
+        _modal++;
+        try { return show(); }
+        finally { _modal--; }
+    }
+
+    private DialogResult ShowMessage(string text, string caption, MessageBoxButtons buttons, MessageBoxIcon icon) =>
+        RunModal(() => MessageBox.Show(this, text, caption, buttons, icon));
+
     private bool OnGlobalMouseDown(MouseButtons button, Point screen, int index)
     {
         if (_interactive || _closing) return false;
         if (index < 0) return false;
+
+        // One of our modal dialogs (cell settings, set manager, a message box) is open. Acting on
+        // a press now would run a zoom, swap or set switch inside the dialog's modal loop and
+        // pull the set out from under the dialog — EditCell writes back by index when it closes.
+        // Swallow the press and its release, do nothing. A counter of our own dialogs rather
+        // than the form's enabled state: an embedded program's own message box disables the
+        // form too (it is that window's root), and the wall must stay usable meanwhile.
+        if (_modal > 0)
+        {
+            _pressedCell = -1;
+            _swallowRelease = true;
+            return true;
+        }
 
         // The menu never sees a click that lands on a cell — the hook takes it first — so it
         // would stay open. A click outside it closes it and does nothing else, as menus do.
@@ -876,13 +968,16 @@ public sealed class MainForm : Form
         // A left press that travels far enough becomes a cell drag. WinForms drag-and-drop is not
         // an option here: the hosted windows belong to other processes and consume the input
         // before any managed control sees it, which is why the hooks exist in the first place.
-        if (_dragFrom < 0 && _pressedCell >= 0 && _pressButton == MouseButtons.Left && !_pressShift &&
-            _preset is not null && _pressedCell < _preset.Cells.Count &&
-            _preset.Cells[_pressedCell].IsConfigured &&
-            (Math.Abs(screen.X - _pressPoint.X) >= DragThreshold ||
-             Math.Abs(screen.Y - _pressPoint.Y) >= DragThreshold))
+        // Everything read here comes from the published map, never from _preset or a Control:
+        // this runs on the hook thread (see HitTestMap).
+        var map = _hook.Map;
+        int pressedCell = _pressedCell;
+        if (_dragFrom < 0 && pressedCell >= 0 && _pressButton == MouseButtons.Left && !_pressShift &&
+            pressedCell < map.Configured.Length && map.Configured[pressedCell] &&
+            (Math.Abs(screen.X - _pressPoint.X) >= map.DragThreshold ||
+             Math.Abs(screen.Y - _pressPoint.Y) >= map.DragThreshold))
         {
-            _dragFrom = _pressedCell;
+            _dragFrom = pressedCell;
             int stale = _hover;
             _hover = -1;
             Post(() => InvalidateCellFrame(stale));
@@ -931,14 +1026,19 @@ public sealed class MainForm : Form
             return false;
         }
 
+        // The cell menu never takes the foreground, so the check above still passes while it is
+        // open. Its keys are its own: arrows move through its items and Enter picks one. Only Esc
+        // is handled here, since the menu would otherwise not see it.
+        if (_menuOpen)
+        {
+            if ((key & Keys.KeyCode) != Keys.Escape) return false;
+            Post(() => _menu.Close(ToolStripDropDownCloseReason.Keyboard));
+            return true;
+        }
+
         switch (key)
         {
             case Keys.Escape:
-                if (_menuOpen)
-                {
-                    Post(() => _menu.Close(ToolStripDropDownCloseReason.Keyboard));
-                    return true;
-                }
                 if (_dragFrom >= 0)
                 {
                     int from = _dragFrom, over = _dragOver;
@@ -1153,8 +1253,7 @@ public sealed class MainForm : Form
 
         // Every configured cell but one ends up hidden, whichever one that is.
         int hidden = Math.Max(0, shown.Count(i => _preset.Cells[i].IsConfigured) - 1);
-        if (hidden > 0 && MessageBox.Show(
-                this,
+        if (hidden > 0 && ShowMessage(
                 L.T($"합치면 왼쪽 위 칸의 화면만 보입니다.\n나머지 {hidden}개 칸의 화면은 숨겨지며, 셀 나누기를 하면 다시 나타납니다.",
                     $"Only the top-left cell's content shows after merging.\nThe other {hidden} cell(s) are hidden, and come back when you split the cell."),
                 L.T("셀 합치기", "Merge cells"), MessageBoxButtons.OKCancel, MessageBoxIcon.Information) != DialogResult.OK)
@@ -1200,20 +1299,19 @@ public sealed class MainForm : Form
         ShowBanner(L.T("셀을 나눴습니다", "Cell split"));
 
         // Staggered for the same reason a set starts staggered.
+        var uncovered = new List<int>();
         for (int r = merge.Row; r <= merge.Bottom; r++)
             for (int c = merge.Column; c <= merge.Right; c++)
             {
                 int i = r * cols + c;
-                if (i == anchor || i >= _cells.Count || _preset.IsCovered(i)) continue;
-                try
-                {
-                    var applying = _cells[i].ApplyAsync(_preset.Cells[i]);
-                    ApplyPresentation();
-                    await Task.Delay(120).ConfigureAwait(true);
-                    await applying.ConfigureAwait(true);
-                }
-                catch { /* a cell that fails reports it itself */ }
+                if (i != anchor) uncovered.Add(i);
             }
+        try
+        {
+            await StartCellsAsync(_preset, uncovered, _applyCts?.Token ?? CancellationToken.None, presentEach: true)
+                .ConfigureAwait(true);
+        }
+        catch { /* a cell that fails reports it itself */ }
     }
 
     // ------------------------------------------------------------------ modes
@@ -1300,13 +1398,13 @@ public sealed class MainForm : Form
         if (_zoomed == index)
         {
             _zoomed = -1;
-            if (!S.StartFullScreen) SetFullScreen(false);
+            if (!S.StartFullScreen) SetFullScreen(false, relayout: false);
         }
         else
         {
             _zoomed = index;
             _selected = index;
-            SetFullScreen(true);
+            SetFullScreen(true, relayout: false);
         }
 
         _hover = -1;
@@ -1373,10 +1471,29 @@ public sealed class MainForm : Form
             : L.T("창 모드 — 다음 실행에도 이 상태로 시작합니다", "Windowed — the next start opens this way too"));
     }
 
-    private void SetFullScreen(bool on)
+    private void SetFullScreen(bool on, bool relayout = true)
     {
         if (on == _fullScreen) return;
 
+        // WindowState, FormBorderStyle and Bounds each raise Resize, and each Resize would run a
+        // whole Relayout — fit zoom pushed to every page, presentation, hit-test map — for a size
+        // that is gone a moment later. Hold them back and lay out once, at the final size.
+        _deferLayout++;
+        try
+        {
+            ApplyFullScreen(on);
+        }
+        finally
+        {
+            _deferLayout--;
+        }
+
+        _fullScreen = on;
+        if (relayout) Relayout();
+    }
+
+    private void ApplyFullScreen(bool on)
+    {
         if (on)
         {
             _restoreBounds = Bounds;
@@ -1396,10 +1513,10 @@ public sealed class MainForm : Form
             WindowState = _restoreState;
             if (_restoreState == FormWindowState.Normal) Bounds = _restoreBounds;
         }
-
-        _fullScreen = on;
-        Relayout();
     }
+
+    /// <summary>Non-zero while <see cref="SetFullScreen"/> is mid-change; see there.</summary>
+    private int _deferLayout;
 
     // ------------------------------------------------------------------ chrome
 
@@ -1527,7 +1644,19 @@ public sealed class MainForm : Form
         _menu.ShowImageMargin = false;
         // Room for the tick on "셀 이름표 표시".
         _menu.ShowCheckMargin = true;
-        _menu.Opened += (_, _) => _menuOpen = true;
+        _menu.Opened += (_, _) =>
+        {
+            _menuOpen = true;
+            // The menu reads its keys from this thread's queue. If keyboard focus sits in a hosted
+            // window (a WebView2 page or a reparented program, both other processes), arrows and
+            // Enter would reach that window under the menu instead. View mode gives hosted apps
+            // no input anyway, so the form takes focus while the menu is up.
+            if (!_interactive)
+            {
+                ActiveControl = null;
+                Focus();
+            }
+        };
         _menu.Closed += (_, _) => _menuOpen = false;
 
         _menuHeader = new ToolStripLabel { ForeColor = LabelDimColor, Margin = new Padding(4, 4, 4, 2) };
@@ -1586,7 +1715,7 @@ public sealed class MainForm : Form
             {
                 var set = sets[i];
                 var entry = new ToolStripMenuItem($"{set.Name}  ({set.Columns}×{set.Rows})", null,
-                    (_, _) => { if (set.Id != _preset.Id) _ = LoadPresetAsync(set); })
+                    (_, _) => { if (set.Id != _preset?.Id) _ = LoadPresetAsync(set); })
                 {
                     Checked = set.Id == _preset?.Id,
                     ShortcutKeyDisplayString = i < 9 ? $"Ctrl+{i + 1}" : string.Empty,
@@ -1846,12 +1975,14 @@ public sealed class MainForm : Form
         CellConfig updated;
         using (var dialog = new CellSettingsForm(index, _preset.Cells[index]))
         {
-            if (dialog.ShowDialog(this) != DialogResult.OK) return;
+            if (RunModal(() => dialog.ShowDialog(this)) != DialogResult.OK) return;
             updated = dialog.Result;
         }
 
         _preset.Cells[index] = updated;
         _store.SaveSet(_preset);
+        // The hook decides "may this press become a drag" from the map's Configured flags.
+        PublishHitTestMap();
         UpdateTitle();
         Invalidate();
 
@@ -1891,6 +2022,7 @@ public sealed class MainForm : Form
         var empty = new CellConfig();
         _preset.Cells[index] = empty;
         _store.SaveSet(_preset);
+        PublishHitTestMap();
         try { await _cells[index].ApplyAsync(empty).ConfigureAwait(true); }
         catch { }
         Invalidate();
@@ -1911,8 +2043,7 @@ public sealed class MainForm : Form
         }
 
         int dropped = ConfiguredCellsOutside(cols, rows);
-        if (dropped > 0 && MessageBox.Show(
-                this,
+        if (dropped > 0 && ShowMessage(
                 L.T($"격자를 {cols}×{rows}로 줄이면 설정된 셀 {dropped}개가 삭제됩니다.\n계속할까요?",
                     $"Shrinking the grid to {cols}×{rows} deletes {dropped} configured cell(s).\nContinue?"),
                 L.T("격자 크기", "Grid size"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
@@ -1961,8 +2092,7 @@ public sealed class MainForm : Form
     }
 
     private bool ConfirmDelete(int configured, string title) =>
-        configured == 0 || MessageBox.Show(
-            this,
+        configured == 0 || ShowMessage(
             L.T($"설정된 셀 {configured}개가 함께 삭제됩니다.\n계속할까요?",
                 $"{configured} configured cell(s) will be deleted with it.\nContinue?"),
             title, MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes;
@@ -2005,7 +2135,7 @@ public sealed class MainForm : Form
         DialogResult result;
         using (var dialog = new PresetManagerForm(_store))
         {
-            result = dialog.ShowDialog(this);
+            result = RunModal(() => dialog.ShowDialog(this));
             chosen = dialog.Selected;
         }
 
@@ -2045,7 +2175,7 @@ public sealed class MainForm : Form
 
 
     /// <summary>Minimal single-line text prompt; WinForms has no built-in one.</summary>
-    private static string? Prompt(string caption, string initial)
+    private string? Prompt(string caption, string initial)
     {
         using var form = new Form
         {
@@ -2063,7 +2193,7 @@ public sealed class MainForm : Form
         form.Controls.AddRange(new Control[] { box, ok, cancel });
         form.AcceptButton = ok;
         form.CancelButton = cancel;
-        return form.ShowDialog() == DialogResult.OK ? box.Text : null;
+        return RunModal(() => form.ShowDialog()) == DialogResult.OK ? box.Text : null;
     }
 
     // ------------------------------------------------------------------ shutdown
@@ -2075,15 +2205,22 @@ public sealed class MainForm : Form
         _store.SaveSet(_preset);
         _store.SaveSettings();
         _maintenanceTimer.Stop();
+        _closeZoomTimer.Stop();
+        _updateTimer.Stop();
         _applyCts?.Cancel();
         _hook.Dispose();
 
         foreach (var cell in _cells)
         {
             cell.StateChanged -= OnCellStateChanged;
+            cell.TitleChanged -= OnCellTitleChanged;
             cell.UserZoomed -= OnCellUserZoom;
             cell.Release();
         }
+
+        // Program cells set to close with the wall end their programs in the background; give
+        // them the same 1.5s each used to get one after another, but all at once.
+        NativeAppHost.WaitForPendingCloses(TimeSpan.FromSeconds(2));
 
         _store.SaveSet(_preset);
         base.OnFormClosing(e);
@@ -2114,8 +2251,9 @@ public sealed class MainForm : Form
             if (hours > 0 && now - _lastRecycleUtc >= TimeSpan.FromHours(hours))
             {
                 // Not while anyone is looking closely: a zoomed or interactive cell would blink.
-                // Leaving _lastRecycleUtc alone means the next tick tries again.
-                if (!_interactive && _zoomed < 0) _ = RecycleBrowserCellsAsync();
+                // Leaving _lastRecycleUtc alone means the next tick tries again — and since it is
+                // only set once a pass completes, that holds for a pass cut short half-way too.
+                if (!_interactive && _zoomed < 0 && !_recycling) _ = RecycleBrowserCellsAsync();
             }
         };
         _maintenanceTimer.Start();
@@ -2129,11 +2267,32 @@ public sealed class MainForm : Form
     /// </summary>
     private async Task RecycleBrowserCellsAsync()
     {
-        _lastRecycleUtc = DateTime.UtcNow;
-
-        for (int i = 0; i < _cells.Count; i++)
+        _recycling = true;
+        try
         {
-            if (_closing || _interactive || _zoomed >= 0) return;
+            if (await RecyclePassAsync().ConfigureAwait(true)) _lastRecycleUtc = DateTime.UtcNow;
+        }
+        finally
+        {
+            _recycling = false;
+        }
+    }
+
+    /// <summary>One staggered pass; false when it was cut short and should run again.</summary>
+    private async Task<bool> RecyclePassAsync()
+    {
+        // A set switched mid-pass has just loaded fresh; reloading it again would only blink.
+        var preset = _preset;
+        if (!ReferenceEquals(preset, _recycleSet)) _recycleNext = 0;
+        _recycleSet = preset;
+
+        // Resumes where a cut-short pass stopped, so a wall that keeps being zoomed still gets
+        // round to its last cells instead of reloading the first ones over and over.
+        for (int i = _recycleNext; i < _cells.Count; i++)
+        {
+            _recycleNext = i;
+            if (_closing || _interactive || _zoomed >= 0) return false;
+            if (!ReferenceEquals(preset, _preset)) { _recycleNext = 0; return true; }
             if (i >= _preset.Cells.Count || _preset.Cells[i].Kind != CellKind.Browser) continue;
             if (_preset.IsCovered(i)) continue;
             // A cell with its own interval refreshes on that; leave it alone.
@@ -2145,10 +2304,12 @@ public sealed class MainForm : Form
             // Same reason the cells start staggered: reloading six pages at once spikes CPU
             // and would stall input for everyone.
             try { await Task.Delay(2000).ConfigureAwait(true); }
-            catch { return; }
+            catch { return false; }
         }
 
+        _recycleNext = 0;
         HealthMonitor.Sample("browser cells recycled");
+        return true;
     }
 
     // ------------------------------------------------------------------ updates
@@ -2187,9 +2348,16 @@ public sealed class MainForm : Form
 
     private void ShowUpdateDialog()
     {
-        using var dialog = new UpdateForm(S, _updates);
-        dialog.ShowDialog(this);
-        if (dialog.SettingsChanged) _store.SaveSettings();
+        bool restart;
+        using (var dialog = new UpdateForm(S, _updates))
+        {
+            RunModal(() => dialog.ShowDialog(this));
+            if (dialog.SettingsChanged) _store.SaveSettings();
+            restart = dialog.RestartRequested;
+        }
+        // The staged copy is waiting for this process to exit before it copies the new version
+        // in and starts it again. Closing saves the set and takes the hooks down on the way.
+        if (restart) Close();
     }
 
     protected override void Dispose(bool disposing)
@@ -2200,6 +2368,8 @@ public sealed class MainForm : Form
             _bannerTimer.Dispose();
             _updateTimer.Dispose();
             _maintenanceTimer.Dispose();
+            _closeZoomTimer.Dispose();
+            _closeZoomTip.Dispose();
             _menu.Dispose();
             _store.Dispose();
             _applyCts?.Dispose();

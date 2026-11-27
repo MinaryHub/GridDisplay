@@ -28,6 +28,7 @@ public static class HookDiagnostics
     private const long MaxLogBytes = 512 * 1024;
 
     private static readonly object Gate = new();
+    private static readonly object WriteGate = new();
     private static long _samples;
     private static long _slow;
     private static double _worstMs;
@@ -59,7 +60,11 @@ public static class HookDiagnostics
             _lastWriteUtc = now;
         }
 
-        Write($"slow input hook {ms:F1}ms ({what}) · slow so far {_slow} / samples {_samples} · max {_worstMs:F1}ms ({_worstWhat})");
+        // Record runs inside the hook callback, before it returns, and only when that callback
+        // was already slow — so the file I/O (and whatever antivirus adds to it) must not run
+        // here, or measuring a stall would lengthen it. The line is built now and written later.
+        var line = $"slow input hook {ms:F1}ms ({what}) · slow so far {_slow} / samples {_samples} · max {_worstMs:F1}ms ({_worstWhat})";
+        ThreadPool.UnsafeQueueUserWorkItem(static l => Write(l), line, preferLocal: false);
     }
 
     /// <summary>Called on shutdown so a quiet run still leaves its worst case behind.</summary>
@@ -82,18 +87,22 @@ public static class HookDiagnostics
 
     private static void Write(string message)
     {
-        try
+        // Serialised: lines queued from the hook thread can arrive here concurrently.
+        lock (WriteGate)
         {
-            Directory.CreateDirectory(LocalRoot);
-            RollIfLarge();
-            File.AppendAllText(
-                LogPath,
-                $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] pid {Environment.ProcessId} {message}{Environment.NewLine}",
-                Encoding.UTF8);
-        }
-        catch
-        {
-            // Diagnostics must never be the reason the wall stops.
+            try
+            {
+                Directory.CreateDirectory(LocalRoot);
+                RollIfLarge();
+                File.AppendAllText(
+                    LogPath,
+                    $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] pid {Environment.ProcessId} {message}{Environment.NewLine}",
+                    Encoding.UTF8);
+            }
+            catch
+            {
+                // Diagnostics must never be the reason the wall stops.
+            }
         }
     }
 

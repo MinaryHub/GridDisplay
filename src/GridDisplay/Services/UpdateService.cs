@@ -389,8 +389,11 @@ public sealed class UpdateService
         string staging;
         try
         {
+            // HttpClient.Timeout covers only the headers here (ResponseHeadersRead), so a body
+            // that stalls half-way would keep the dialog busy forever with no way out.
+            using var timeout = new CancellationTokenSource(DownloadTimeout);
             staging = await UpdateInstaller
-                .StageZipAsync(Http, url, expectedSha256, progress, CancellationToken.None)
+                .StageZipAsync(Http, url, expectedSha256, progress, timeout.Token)
                 .ConfigureAwait(true);
         }
         catch (Exception ex)
@@ -410,6 +413,9 @@ public sealed class UpdateService
         return new UpdateApplyResult(UpdateApplyOutcome.Restarting,
             L.T("업데이트를 적용합니다. 프로그램이 잠시 후 다시 시작됩니다.", "Applying the update. The program will restart shortly."));
     }
+
+    /// <summary>The whole package download, body included; generous for a slow intranet link.</summary>
+    private static readonly TimeSpan DownloadTimeout = TimeSpan.FromMinutes(10);
 
     private static HttpClient CreateClient()
     {

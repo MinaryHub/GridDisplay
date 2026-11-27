@@ -38,6 +38,7 @@ internal static class NativeMethods
     internal const uint SWP_FRAMECHANGED = 0x0020;
     internal const uint SWP_SHOWWINDOW = 0x0040;
     internal const uint SWP_NOOWNERZORDER = 0x0200;
+    internal const uint SWP_ASYNCWINDOWPOS = 0x4000;
     internal static readonly IntPtr HWND_TOP = IntPtr.Zero;
 
     // --- ShowWindow ---
@@ -66,6 +67,7 @@ internal static class NativeMethods
     internal const int WM_MBUTTONUP = 0x0208;
     internal const int WM_MOUSEMOVE = 0x0200;
     internal const int WM_CLOSE = 0x0010;
+    internal const int WM_TIMER = 0x0113;
 
     [StructLayout(LayoutKind.Sequential)]
     internal struct POINT
@@ -133,6 +135,26 @@ internal static class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool PostThreadMessage(uint idThread, uint msg, IntPtr wParam, IntPtr lParam);
 
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool PostMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+    /// <summary>A thread timer (hWnd = 0, no callback): arrives as WM_TIMER in that thread's GetMessage.</summary>
+    [DllImport("user32.dll")]
+    internal static extern UIntPtr SetTimer(IntPtr hWnd, UIntPtr nIDEvent, uint uElapse, IntPtr lpTimerFunc);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool KillTimer(IntPtr hWnd, UIntPtr uIDEvent);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool IsHungAppWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool IsWindowEnabled(IntPtr hWnd);
 
     [DllImport("user32.dll", SetLastError = true)]
     internal static extern IntPtr SetParent(IntPtr hWndChild, IntPtr hWndNewParent);

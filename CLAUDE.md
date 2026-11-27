@@ -102,7 +102,18 @@ Guard rails that matter when touching the hooks:
   `volatile`; the press/drag fields are touched only by the hook thread, in event order.
 - `HookDiagnostics` times every callback and writes a line when one exceeds 15ms. Two timestamp
   reads per event is a fair price for being able to tell "the machine froze" apart from "our
-  callback was slow" — the two are indistinguishable by eye.
+  callback was slow" — the two are indistinguishable by eye. The line is *written* on the thread
+  pool, never inside the callback: it is only ever written when the callback was already slow.
+- Anything a handler needs beyond the hit test (which cells have content, the drag threshold)
+  goes into `HitTestMap` too, read through `InputHook.Map` — not from `_preset` or a Control.
+- Windows removes a low-level hook *silently* once a callback overruns `LowLevelHooksTimeout`
+  (a blocking GC suspends the hook thread too). `InputHook` therefore re-installs both hooks every
+  5 minutes from a thread timer on the hook thread, new before old, so coverage never lapses.
+- `MainForm.OnMove` republishes the map: a move changes no size, so no `Relayout` runs, and a
+  stale map lets clicks through to hosted pages. While one of our own modal dialogs is open
+  (`_modal`, raised by `MainForm.RunModal`, which every `ShowDialog`/`MessageBox` goes through),
+  presses on cells are swallowed and ignored. Not the form's enabled state: an embedded program's
+  own message box disables the form too, and the wall must stay usable meanwhile.
 - The keyboard hook must only act while the main form is the foreground window, otherwise the
   app steals keys from the rest of the desktop.
 - Modifiers are read with `GetAsyncKeyState`, not `Control.ModifierKeys` — inside a low-level
@@ -112,9 +123,13 @@ Guard rails that matter when touching the hooks:
 
 **Persistence.** `CellConfig` objects in `GridPreset.Cells` are the *same references* the running
 `CellHost` mutates. A WebView2 `SourceChanged` writes straight into `CellConfig.Url` and raises
-`StateChanged`, which the form turns into a debounced save. That aliasing is deliberate — do not
-clone configs into the cells or live URLs stop being recorded. `StateStore` debounces ~1.5s and
-writes atomically (temp file + `File.Move` overwrite) because navigation events are frequent.
+`StateChanged`, which the form turns into a debounced save (titles raise `TitleChanged` instead,
+which only repaints — a ticking title must not rewrite the set every second). That aliasing is
+deliberate — do not clone configs into the cells or live URLs stop being recorded.
+`SetStore.SaveSetSoon` saves 1s after the *first* report (the timer is not restarted, or a busy
+cell would postpone the save indefinitely) on a WinForms timer, so the flush runs on the UI thread
+and never serialises a set the UI thread is rebuilding. Writes are atomic (temp file + `File.Move`
+overwrite). A set deleted in this run is never written again, so a late save cannot revive it.
 
 **Layout.** `MainForm.Relayout` positions cells manually rather than through a
 `TableLayoutPanel`, since zooming means "one cell takes the whole area and the rest go

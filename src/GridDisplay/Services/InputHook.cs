@@ -20,6 +20,15 @@ public sealed class HitTestMap
     public bool ClicksEnabled { get; init; }
     /// <summary>False while a cell is zoomed: there is no hover to track.</summary>
     public bool HoverEnabled { get; init; }
+
+    /// <summary>
+    /// Per cell, whether it has content — what decides if a press may become a drag. Snapshotted
+    /// here so the hook never reads the live set, which the UI thread rebuilds underneath it.
+    /// </summary>
+    public bool[] Configured { get; init; } = Array.Empty<bool>();
+
+    /// <summary>Pixels a press must travel to become a drag, resolved on the UI thread (it needs the DPI).</summary>
+    public int DragThreshold { get; init; } = 4;
 }
 
 /// <summary>
@@ -82,6 +91,9 @@ public sealed class InputHook : IDisposable
     /// <summary>Publish a fresh hit-test snapshot. Called from the UI thread on every relayout.</summary>
     public void SetMap(HitTestMap map) => _map = map;
 
+    /// <summary>The map the hook is currently testing against — for handlers that run on the hook thread.</summary>
+    public HitTestMap Map => _map;
+
     public void Install()
     {
         if (_thread is not null) return;
@@ -100,10 +112,15 @@ public sealed class InputHook : IDisposable
     private void ThreadMain()
     {
         _threadId = NativeMethods.GetCurrentThreadId();
-        var module = NativeMethods.GetModuleHandle(null);
-        _keyboardHook = NativeMethods.SetWindowsHookEx(NativeMethods.WH_KEYBOARD_LL, _keyboardProc, module, 0);
-        _mouseHook = NativeMethods.SetWindowsHookEx(NativeMethods.WH_MOUSE_LL, _mouseProc, module, 0);
+        InstallHooks();
         _installed.Set();
+
+        // Windows 7 and later remove a low-level hook *silently* once a callback overruns
+        // LowLevelHooksTimeout — and a blocking GC suspends this thread too, managed as it is.
+        // There is no notification and no way to ask whether a hook is still installed, so on a
+        // wall that runs for weeks view mode would just stop intercepting clicks one day. The
+        // cure is to re-install periodically; it costs two system calls every few minutes.
+        var renew = NativeMethods.SetTimer(IntPtr.Zero, UIntPtr.Zero, RenewIntervalMs, IntPtr.Zero);
 
         // A plain pump. Low-level hook callbacks are delivered while retrieving messages, so
         // there is nothing else for this thread to do — which is the entire point.
@@ -111,14 +128,47 @@ public sealed class InputHook : IDisposable
         {
             int result = NativeMethods.GetMessage(out var msg, IntPtr.Zero, 0, 0);
             if (result is 0 or -1) break;
+            if (msg.message == NativeMethods.WM_TIMER && msg.hwnd == IntPtr.Zero && msg.wParam == (IntPtr)(long)(ulong)renew)
+            {
+                InstallHooks();
+                continue;
+            }
             NativeMethods.TranslateMessage(ref msg);
             NativeMethods.DispatchMessage(ref msg);
         }
 
+        if (renew != UIntPtr.Zero) NativeMethods.KillTimer(IntPtr.Zero, renew);
         if (_keyboardHook != IntPtr.Zero) NativeMethods.UnhookWindowsHookEx(_keyboardHook);
         if (_mouseHook != IntPtr.Zero) NativeMethods.UnhookWindowsHookEx(_mouseHook);
         _keyboardHook = IntPtr.Zero;
         _mouseHook = IntPtr.Zero;
+    }
+
+    /// <summary>How often the hooks are re-installed; see <see cref="ThreadMain"/>.</summary>
+    private const uint RenewIntervalMs = 5 * 60 * 1000;
+
+    /// <summary>
+    /// Install both hooks, replacing any already installed. The new ones go in before the old
+    /// ones come out, so there is no instant in which input goes unwatched. Runs on the hook
+    /// thread only — a hook belongs to the thread that installed it.
+    /// </summary>
+    private void InstallHooks()
+    {
+        var module = NativeMethods.GetModuleHandle(null);
+        var keyboard = NativeMethods.SetWindowsHookEx(NativeMethods.WH_KEYBOARD_LL, _keyboardProc, module, 0);
+        var mouse = NativeMethods.SetWindowsHookEx(NativeMethods.WH_MOUSE_LL, _mouseProc, module, 0);
+
+        // A failed re-install keeps the old hook rather than leaving none.
+        if (keyboard != IntPtr.Zero)
+        {
+            if (_keyboardHook != IntPtr.Zero) NativeMethods.UnhookWindowsHookEx(_keyboardHook);
+            _keyboardHook = keyboard;
+        }
+        if (mouse != IntPtr.Zero)
+        {
+            if (_mouseHook != IntPtr.Zero) NativeMethods.UnhookWindowsHookEx(_mouseHook);
+            _mouseHook = mouse;
+        }
     }
 
     // ------------------------------------------------------------------ callbacks
