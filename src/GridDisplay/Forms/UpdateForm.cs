@@ -197,6 +197,13 @@ public sealed class UpdateForm : Form
     /// <summary>True once the dialog touched <see cref="AppState"/>; the caller turns it into a save.</summary>
     public bool SettingsChanged { get; private set; }
 
+    /// <summary>
+    /// True when an unpackaged update has been handed to the staged copy, which waits for this
+    /// process to exit before it copies anything. The caller must close the wall: the staged
+    /// copy gives up after 30 seconds, and the user was told the app would restart.
+    /// </summary>
+    public bool RestartRequested { get; private set; }
+
     private async Task RunCheckAsync()
     {
         if (_busy) return;
@@ -233,6 +240,8 @@ public sealed class UpdateForm : Form
             _progress.Visible = false;
             SetBusy(false, null);
         }
+
+        if (RestartRequested) Close();
     }
 
     /// <summary>
@@ -244,6 +253,9 @@ public sealed class UpdateForm : Form
         _status.ForeColor = result.Outcome == UpdateApplyOutcome.Failed ? Color.FromArgb(180, 40, 40) : ForeColor;
         _status.Text = result.Message;
         if (result.Outcome == UpdateApplyOutcome.Failed) return;
+        // A packaged build is shut down by Windows itself (ForceTargetAppShutdown); the zip path
+        // has nobody to do it but us.
+        if (result.Outcome == UpdateApplyOutcome.Restarting && !AppVersion.IsPackaged) RestartRequested = true;
         // Opening the Store is repeatable and costs nothing, so that one button stays live.
         if (_storeManaged) return;
         _installLater.Enabled = false;
@@ -264,12 +276,7 @@ public sealed class UpdateForm : Form
 
         _found = result is { Status: UpdateStatus.Available } ? result : null;
 
-        // Three shapes, and the buttons have to say which one applies. A packaged build hands the
-        // job to Windows; an unpackaged build whose feed points at a hashed .zip replaces its own
-        // install folder; anything else can only put the installer in front of the user.
-        bool selfInstalls = AppVersion.IsPackaged || (_found is not null && CanReplaceItself(_found));
-        _installNow.Enabled = _found is not null && selfInstalls;
-        _installLater.Enabled = _found is not null && (AppVersion.IsPackaged || !selfInstalls);
+        UpdateInstallButtons();
         _installLater.Text = AppVersion.IsPackaged
             ? L.T("설치 (다음 실행 시 적용)", "Install (applies on next start)")
             : L.T("설치 파일 열기", "Open installer");
@@ -293,6 +300,26 @@ public sealed class UpdateForm : Form
         _status.Text = result.Message;
     }
 
+    /// <summary>
+    /// Three shapes, and the buttons have to say which one applies. A packaged build hands the
+    /// job to Windows; an unpackaged build whose feed points at a hashed .zip replaces its own
+    /// install folder; anything else can only put the installer in front of the user. One place
+    /// for this, because SetBusy(false) used to re-enable the buttons by a cruder rule of its own
+    /// and undo it — greying out "Install now" on exactly the zip-feed build that needs it.
+    /// </summary>
+    private void UpdateInstallButtons()
+    {
+        if (_storeManaged)
+        {
+            // Opening the Store is always available; there is no "install now" for it.
+            _installLater.Enabled = true;
+            return;
+        }
+        bool selfInstalls = AppVersion.IsPackaged || (_found is not null && CanReplaceItself(_found));
+        _installNow.Enabled = _found is not null && selfInstalls;
+        _installLater.Enabled = _found is not null && (AppVersion.IsPackaged || !selfInstalls);
+    }
+
     private void SetBusy(bool busy, string? message)
     {
         _busy = busy;
@@ -309,10 +336,9 @@ public sealed class UpdateForm : Form
                 _status.Text = message;
             }
         }
-        else if (_found is not null)
+        else
         {
-            _installLater.Enabled = true;
-            _installNow.Enabled = AppVersion.IsPackaged;
+            UpdateInstallButtons();
         }
     }
 

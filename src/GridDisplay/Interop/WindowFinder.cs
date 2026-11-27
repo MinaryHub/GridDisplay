@@ -28,19 +28,19 @@ internal static class WindowFinder
         return r.Width > 80 && r.Height > 60;
     }
 
-    public static IntPtr FindByTitle(string titleFragment, IntPtr exclude)
+    public static IntPtr FindByTitle(string titleFragment, IntPtr exclude, ISet<IntPtr>? ignore = null)
     {
         if (string.IsNullOrWhiteSpace(titleFragment)) return IntPtr.Zero;
         foreach (var h in TopLevelWindows())
         {
-            if (h == exclude || !IsUsableWindow(h)) continue;
+            if (h == exclude || ignore?.Contains(h) == true || !IsUsableWindow(h)) continue;
             var title = NativeMethods.GetWindowTitle(h);
             if (title.Contains(titleFragment, StringComparison.OrdinalIgnoreCase)) return h;
         }
         return IntPtr.Zero;
     }
 
-    public static IntPtr FindByProcessName(string processName, string titleFragment, IntPtr exclude)
+    public static IntPtr FindByProcessName(string processName, string titleFragment, IntPtr exclude, ISet<IntPtr>? ignore = null)
     {
         if (string.IsNullOrWhiteSpace(processName)) return IntPtr.Zero;
         var pids = new HashSet<uint>();
@@ -53,7 +53,7 @@ internal static class WindowFinder
 
         foreach (var h in TopLevelWindows())
         {
-            if (h == exclude || !IsUsableWindow(h)) continue;
+            if (h == exclude || ignore?.Contains(h) == true || !IsUsableWindow(h)) continue;
             NativeMethods.GetWindowThreadProcessId(h, out uint pid);
             if (!pids.Contains(pid)) continue;
             if (!string.IsNullOrWhiteSpace(titleFragment) &&
@@ -69,16 +69,23 @@ internal static class WindowFinder
     /// <summary>
     /// Poll until the launched app shows a window. Returns <see cref="IntPtr.Zero"/> on timeout.
     /// Polling (rather than a shell hook) keeps this contained and cancellable.
+    ///
+    /// <paramref name="ignore"/> is every top-level window that existed before the launch. The
+    /// name and title fallbacks match *any* process, so without it the first poll — before the
+    /// new process has a window — would take the user's own copy of the same program, or one
+    /// another wall had just started, and closing the cell would later close that window.
     /// </summary>
     public static async Task<IntPtr> WaitForWindowAsync(
         Process? process,
         string processName,
         string titleFragment,
         IntPtr exclude,
+        ISet<IntPtr>? ignore,
         TimeSpan timeout,
         CancellationToken ct)
     {
-        var deadline = Environment.TickCount64 + (long)timeout.TotalMilliseconds;
+        var started = Environment.TickCount64;
+        var deadline = started + (long)timeout.TotalMilliseconds;
         while (Environment.TickCount64 < deadline)
         {
             ct.ThrowIfCancellationRequested();
@@ -107,16 +114,20 @@ internal static class WindowFinder
                 }
             }
 
-            var byName = FindByProcessName(processName, titleFragment, exclude);
+            var byName = FindByProcessName(processName, titleFragment, exclude, ignore);
             if (byName != IntPtr.Zero) return byName;
 
             if (!string.IsNullOrWhiteSpace(titleFragment))
             {
-                var byTitle = FindByTitle(titleFragment, exclude);
+                var byTitle = FindByTitle(titleFragment, exclude, ignore);
                 if (byTitle != IntPtr.Zero) return byTitle;
             }
 
-            await Task.Delay(150, ct).ConfigureAwait(true);
+            // Each poll snapshots every process and enumerates every window, on the UI thread.
+            // Most apps show a window within a couple of seconds; a slow one does not need to be
+            // spotted within 150ms, and several program cells starting together add up.
+            int delay = Environment.TickCount64 - started < 3000 ? 150 : 500;
+            await Task.Delay(delay, ct).ConfigureAwait(true);
         }
         return IntPtr.Zero;
     }

@@ -36,9 +36,20 @@ public sealed class SetStore : IDisposable
     /// <summary>
     /// Browser cells report every navigation, and a redirect chain can fire several a second.
     /// Those coalesce; anything the user actually did is written immediately.
+    ///
+    /// A WinForms timer, so the flush runs on the UI thread. It used to be a thread-pool timer,
+    /// which serialised the open set while the UI thread was rebuilding it (a drag-swap, an
+    /// insert): at best a half-changed file, at worst "collection was modified" thrown from a
+    /// timer callback — which ends the process, wall and all.
     /// </summary>
-    private readonly System.Threading.Timer _urlDebounce;
+    private readonly System.Windows.Forms.Timer _urlDebounce = new() { Interval = 1000 };
     private GridPreset? _urlPending;
+
+    /// <summary>
+    /// Ids of sets deleted in this run. A save of one of those must not bring its file back —
+    /// the set manager can delete the open set, which is saved again as the dialog closes.
+    /// </summary>
+    private readonly HashSet<string> _deleted = new(StringComparer.Ordinal);
 
     private bool _disposed;
 
@@ -62,7 +73,11 @@ public sealed class SetStore : IDisposable
 
     public SetStore()
     {
-        _urlDebounce = new System.Threading.Timer(_ => FlushUrls(), null, Timeout.Infinite, Timeout.Infinite);
+        _urlDebounce.Tick += (_, _) =>
+        {
+            _urlDebounce.Stop();
+            FlushUrls();
+        };
     }
 
     // ------------------------------------------------------------------ load
@@ -212,6 +227,7 @@ public sealed class SetStore : IDisposable
         if (_disposed || set is null) return;
         lock (_gate)
         {
+            if (_deleted.Contains(set.Id)) return;
             var path = _files.TryGetValue(set.Id, out var known) ? known : ReserveFile(set);
             path = RenameIfNameChanged(set, path);
             WriteAtomic(path, JsonSerializer.Serialize(set, JsonOptions));
@@ -222,16 +238,26 @@ public sealed class SetStore : IDisposable
     public void SaveSetSoon(GridPreset set)
     {
         if (_disposed || set is null) return;
+
+        // Only one set is held; a different one arriving (a set switch within the second) must
+        // not push the previous set's last addresses out unsaved.
+        if (_urlPending is not null && !ReferenceEquals(_urlPending, set)) FlushUrls();
+
         _urlPending = set;
-        try { _urlDebounce.Change(1000, Timeout.Infinite); }
-        catch (ObjectDisposedException) { }
+        // Not restarted while already counting down: a cell that reports continuously would
+        // otherwise keep pushing the save back, and nothing reached the disk until shutdown.
+        // A second after the first report coalesces a redirect chain just as well.
+        if (!_urlDebounce.Enabled) _urlDebounce.Start();
     }
 
     private void FlushUrls()
     {
+        _urlDebounce.Stop();
         var pending = _urlPending;
         _urlPending = null;
-        if (pending is not null) SaveSet(pending);
+        if (pending is null) return;
+        try { SaveSet(pending); }
+        catch { /* the next report or user edit saves again; losing one is survivable */ }
     }
 
     public void SaveSettings()
@@ -269,6 +295,8 @@ public sealed class SetStore : IDisposable
                 _files.Remove(set.Id);
             }
             _sets.Remove(set);
+            _deleted.Add(set.Id);
+            if (_urlPending?.Id == set.Id) _urlPending = null;
         }
     }
 
@@ -383,9 +411,11 @@ public sealed class SetStore : IDisposable
     public void Dispose()
     {
         if (_disposed) return;
-        _disposed = true;
+        // Flush before raising the flag: both saves return early once it is set, so the final
+        // flush used to do nothing at all.
         FlushUrls();
-        _urlDebounce.Dispose();
         SaveSettings();
+        _disposed = true;
+        _urlDebounce.Dispose();
     }
 }

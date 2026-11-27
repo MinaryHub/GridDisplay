@@ -250,12 +250,36 @@ public static class UpdateInstaller
         {
             if (!Directory.Exists(UpdatesRoot)) return;
 
+            // Every copy on the machine shares this folder. A copy starting while another is
+            // downloading or applying an update would delete that update out from under it, so
+            // only a copy that is alone cleans up; leftovers wait for the next lone start.
+            if (OtherInstancesRunning()) return;
+
             // The applier is still exiting out of one of these when the new build starts, so a
             // delete can fail. Whatever survives is picked up by the next launch.
             foreach (var dir in Directory.GetDirectories(UpdatesRoot))
                 TryDeleteDirectory(dir);
         }
         catch { }
+    }
+
+    private static bool OtherInstancesRunning()
+    {
+        try
+        {
+            int mine = Environment.ProcessId;
+            bool other = false;
+            foreach (var process in Process.GetProcessesByName(Path.GetFileNameWithoutExtension(ExeName)))
+            {
+                if (process.Id != mine) other = true;
+                process.Dispose();
+            }
+            return other;
+        }
+        catch
+        {
+            return true;   // cannot tell: leave the files, which costs only disk space
+        }
     }
 
     internal static void TryDeleteDirectory(string path)
