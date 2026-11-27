@@ -205,6 +205,9 @@ public sealed class CellHost : Panel
     /// </summary>
     public event Action<CellHost>? TitleChanged;
 
+    /// <summary>Completes when the program this cell last let go of has exited; see ApplyAsync.</summary>
+    private Task _closingProgram = Task.CompletedTask;
+
     /// <summary>One font for every cell's placeholder: a Label does not dispose an assigned font, so a per-cell one leaked a GDI handle each time a grid was rebuilt.</summary>
     private static readonly Font PlaceholderFont = new("Segoe UI", 11f, FontStyle.Regular);
 
@@ -252,6 +255,12 @@ public sealed class CellHost : Panel
 
             case CellKind.Program:
                 StatusText = L.T("프로그램 시작 중…", "Starting program…");
+                // The previous program (this cell's, if it held one) may still be closing. A
+                // single-instance app would hand this launch to that copy and exit, and the copy
+                // would then be ended — leaving nothing to find.
+                try { await _closingProgram.WaitAsync(TimeSpan.FromSeconds(3), ct).ConfigureAwait(true); }
+                catch { }
+                if (ct.IsCancellationRequested) break;
                 await StartProgramAsync(config, ct).ConfigureAwait(true);
                 break;
 
@@ -993,7 +1002,7 @@ public sealed class CellHost : Panel
 
         if (_native is not null)
         {
-            _native.Release(Config.CloseOnRelease);
+            _closingProgram = _native.Release(Config.CloseOnRelease);
             Controls.Remove(_native);
             _native.Dispose();
             _native = null;

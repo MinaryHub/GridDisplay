@@ -320,10 +320,21 @@ public sealed class UpdateForm : Form
         _installLater.Enabled = _found is not null && (AppVersion.IsPackaged || !selfInstalls);
     }
 
+    /// <summary>Esc and Alt+F4 as well as the button: an install in progress must report back here.</summary>
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        if (_busy && e.CloseReason == CloseReason.UserClosing) e.Cancel = true;
+        base.OnFormClosing(e);
+    }
+
     private void SetBusy(bool busy, string? message)
     {
         _busy = busy;
         _check.Enabled = !busy;
+        // Closing mid-download would drop the result: the staged copy would be launched after
+        // the dialog is gone, and nobody would close the wall for it.
+        _close.Enabled = !busy;
+        ControlBox = !busy;
         _feedUrl.Enabled = !busy;
         UseWaitCursor = busy;
         if (busy)

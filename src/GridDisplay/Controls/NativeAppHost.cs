@@ -64,8 +64,10 @@ public sealed class NativeAppHost : Panel
             if (string.IsNullOrWhiteSpace(config.ExecutablePath))
                 return L.T("실행 중인 창을 찾지 못했습니다.", "Could not find the running window.");
 
-            // Every window that is already up is someone else's; see WaitForWindowAsync.
-            var before = new HashSet<IntPtr>(WindowFinder.TopLevelWindows());
+            // Every window already on screen is someone else's; see WaitForWindowAsync. Visible
+            // ones only: a program waiting in the tray keeps a hidden window, and launching it
+            // again just shows that same window — which must still be found.
+            var before = new HashSet<IntPtr>(WindowFinder.TopLevelWindows().Where(WindowFinder.IsUsableWindow));
             try
             {
                 var psi = new ProcessStartInfo
@@ -208,23 +210,43 @@ public sealed class NativeAppHost : Panel
         Fit(force: true);
     }
 
-    /// <summary>Detach the window. Either closes the app or restores it as a normal top-level window.</summary>
-    public void Release(bool closeProcess)
+    /// <summary>
+    /// Detach the window. Either closes the app or restores it as a normal top-level window.
+    /// Returns once the window is detached; the task completes when a program being closed has
+    /// actually gone (see the end of the method), which a relaunch must wait for.
+    /// </summary>
+    public Task Release(bool closeProcess)
     {
-        if (_released) return;
+        if (_released) return Task.CompletedTask;
         _released = true;
         _guard.Stop();
 
         var child = _child;
         _child = IntPtr.Zero;
+        bool ours = closeProcess && !_adoptedExisting;
 
-        // Every call below waits for the hosted app to answer. Restarting a cell is exactly what
-        // an operator does when that app has hung, so a hung window is not touched at all —
-        // its process is ended below instead — rather than freezing the whole wall with it.
         bool alive = child != IntPtr.Zero && NativeMethods.IsWindow(child);
-        bool hung = alive && NativeMethods.IsHungAppWindow(child);
+        if (alive && NativeMethods.IsHungAppWindow(child) && ours)
+        {
+            // Restarting a cell is exactly what an operator does when its program has hung, and
+            // every call that detaches the window waits for that program to answer. Since it is
+            // ours to end, end it — the process that owns the *window*, which for a launcher is
+            // not _process — and its window goes with it before the cell is torn down. Waiting
+            // briefly here is bounded; detaching a hung window is not.
+            NativeMethods.GetWindowThreadProcessId(child, out uint owner);
+            try
+            {
+                using var hungProcess = Process.GetProcessById((int)owner);
+                hungProcess.Kill(entireProcessTree: true);
+                hungProcess.WaitForExit(1000);
+            }
+            catch { }
+            alive = NativeMethods.IsWindow(child);
+        }
 
-        if (alive && !hung)
+        // A hung window that is not ours to end goes through the normal path below: it has to
+        // leave the cell before the cell is destroyed, and that is worth waiting for.
+        if (alive)
         {
             NativeMethods.SetParent(child, IntPtr.Zero);
             NativeMethods.SetWindowLongPtr(child, NativeMethods.GWL_STYLE, _originalStyle);
@@ -235,7 +257,7 @@ public sealed class NativeAppHost : Panel
 
             // Adopted windows were never ours to close. Posted, not sent: SendMessage waits for
             // the app's WM_CLOSE handler, which may open a "save changes?" box and never return.
-            if (closeProcess && !_adoptedExisting)
+            if (ours)
                 NativeMethods.PostMessage(child, NativeMethods.WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
             else
                 NativeMethods.ShowWindow(child, NativeMethods.SW_SHOWNORMAL);
@@ -243,23 +265,25 @@ public sealed class NativeAppHost : Panel
 
         var process = _process;
         _process = null;
-        if (process is null) return;
+        if (process is null) return Task.CompletedTask;
 
-        if (!closeProcess || _adoptedExisting)
+        if (!ours)
         {
             process.Dispose();
-            return;
+            return Task.CompletedTask;
         }
 
         // Waiting for the exit used to happen right here, on the UI thread: 1.5s per program
         // cell, so switching away from a set with six of them froze the wall for nine seconds.
         // The wait now runs aside, and every cell's in parallel; shutdown collects them with
-        // WaitForPendingCloses so nothing is left running when the wall exits.
+        // WaitForPendingCloses so nothing is left running when the wall exits, and a restart of
+        // this cell awaits the returned task — a single-instance program would otherwise hand
+        // the new launch to the old copy that is still closing.
         var closing = Task.Run(() =>
         {
             try
             {
-                if (!process.WaitForExit(hung ? 0 : 1500) && !process.HasExited)
+                if (!process.WaitForExit(1500) && !process.HasExited)
                     process.Kill(entireProcessTree: true);
             }
             catch { }
@@ -273,6 +297,7 @@ public sealed class NativeAppHost : Panel
             PendingCloses.RemoveAll(t => t.IsCompleted);
             PendingCloses.Add(closing);
         }
+        return closing;
     }
 
     private static readonly List<Task> PendingCloses = new();

@@ -252,13 +252,15 @@ public static class UpdateInstaller
 
             // Every copy on the machine shares this folder. A copy starting while another is
             // downloading or applying an update would delete that update out from under it, so
-            // only a copy that is alone cleans up; leftovers wait for the next lone start.
-            if (OtherInstancesRunning()) return;
+            // while others run only folders a day old go — no download or apply takes that long,
+            // and walls that always run together still get cleaned up.
+            bool alone = !OtherInstancesRunning();
+            var cutoff = DateTime.UtcNow - TimeSpan.FromDays(1);
 
             // The applier is still exiting out of one of these when the new build starts, so a
             // delete can fail. Whatever survives is picked up by the next launch.
             foreach (var dir in Directory.GetDirectories(UpdatesRoot))
-                TryDeleteDirectory(dir);
+                if (alone || Directory.GetLastWriteTimeUtc(dir) < cutoff) TryDeleteDirectory(dir);
         }
         catch { }
     }

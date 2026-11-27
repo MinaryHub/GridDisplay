@@ -110,8 +110,10 @@ Guard rails that matter when touching the hooks:
   (a blocking GC suspends the hook thread too). `InputHook` therefore re-installs both hooks every
   5 minutes from a thread timer on the hook thread, new before old, so coverage never lapses.
 - `MainForm.OnMove` republishes the map: a move changes no size, so no `Relayout` runs, and a
-  stale map lets clicks through to hosted pages. While a modal dialog has the form disabled
-  (`IsWindowEnabled`), presses on cells are swallowed and ignored.
+  stale map lets clicks through to hosted pages. While one of our own modal dialogs is open
+  (`_modal`, raised by `MainForm.RunModal`, which every `ShowDialog`/`MessageBox` goes through),
+  presses on cells are swallowed and ignored. Not the form's enabled state: an embedded program's
+  own message box disables the form too, and the wall must stay usable meanwhile.
 - The keyboard hook must only act while the main form is the foreground window, otherwise the
   app steals keys from the rest of the desktop.
 - Modifiers are read with `GetAsyncKeyState`, not `Control.ModifierKeys` — inside a low-level

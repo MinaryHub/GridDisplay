@@ -34,6 +34,8 @@ public sealed class MainForm : Form
     private DateTime _lastHealthUtc = DateTime.UtcNow;
     private DateTime _lastRecycleUtc = DateTime.UtcNow;
     private bool _recycling;
+    private int _recycleNext;
+    private GridPreset? _recycleSet;
     private readonly ContextMenuStrip _menu = new();
 
     /// <summary>
@@ -851,16 +853,32 @@ public sealed class MainForm : Form
         });
     }
 
+    /// <summary>How many of our own modal dialogs are open; read by the hook (see OnGlobalMouseDown).</summary>
+    private volatile int _modal;
+
+    /// <summary>Run one of our modal dialogs. Every ShowDialog and MessageBox of the form goes through here.</summary>
+    private T RunModal<T>(Func<T> show)
+    {
+        _modal++;
+        try { return show(); }
+        finally { _modal--; }
+    }
+
+    private DialogResult ShowMessage(string text, string caption, MessageBoxButtons buttons, MessageBoxIcon icon) =>
+        RunModal(() => MessageBox.Show(this, text, caption, buttons, icon));
+
     private bool OnGlobalMouseDown(MouseButtons button, Point screen, int index)
     {
         if (_interactive || _closing) return false;
         if (index < 0) return false;
 
-        // A modal dialog (cell settings, set manager, a message box) disables the form but not
-        // the windows hosted in it. Acting on a press now would run a zoom, swap or set switch
-        // inside the dialog's modal loop and pull the set out from under the dialog — EditCell
-        // writes back by index when it closes. Swallow the press and its release, do nothing.
-        if (!NativeMethods.IsWindowEnabled(_formHandle))
+        // One of our modal dialogs (cell settings, set manager, a message box) is open. Acting on
+        // a press now would run a zoom, swap or set switch inside the dialog's modal loop and
+        // pull the set out from under the dialog — EditCell writes back by index when it closes.
+        // Swallow the press and its release, do nothing. A counter of our own dialogs rather
+        // than the form's enabled state: an embedded program's own message box disables the
+        // form too (it is that window's root), and the wall must stay usable meanwhile.
+        if (_modal > 0)
         {
             _pressedCell = -1;
             _swallowRelease = true;
@@ -1235,8 +1253,7 @@ public sealed class MainForm : Form
 
         // Every configured cell but one ends up hidden, whichever one that is.
         int hidden = Math.Max(0, shown.Count(i => _preset.Cells[i].IsConfigured) - 1);
-        if (hidden > 0 && MessageBox.Show(
-                this,
+        if (hidden > 0 && ShowMessage(
                 L.T($"합치면 왼쪽 위 칸의 화면만 보입니다.\n나머지 {hidden}개 칸의 화면은 숨겨지며, 셀 나누기를 하면 다시 나타납니다.",
                     $"Only the top-left cell's content shows after merging.\nThe other {hidden} cell(s) are hidden, and come back when you split the cell."),
                 L.T("셀 합치기", "Merge cells"), MessageBoxButtons.OKCancel, MessageBoxIcon.Information) != DialogResult.OK)
@@ -1627,7 +1644,19 @@ public sealed class MainForm : Form
         _menu.ShowImageMargin = false;
         // Room for the tick on "셀 이름표 표시".
         _menu.ShowCheckMargin = true;
-        _menu.Opened += (_, _) => _menuOpen = true;
+        _menu.Opened += (_, _) =>
+        {
+            _menuOpen = true;
+            // The menu reads its keys from this thread's queue. If keyboard focus sits in a hosted
+            // window (a WebView2 page or a reparented program, both other processes), arrows and
+            // Enter would reach that window under the menu instead. View mode gives hosted apps
+            // no input anyway, so the form takes focus while the menu is up.
+            if (!_interactive)
+            {
+                ActiveControl = null;
+                Focus();
+            }
+        };
         _menu.Closed += (_, _) => _menuOpen = false;
 
         _menuHeader = new ToolStripLabel { ForeColor = LabelDimColor, Margin = new Padding(4, 4, 4, 2) };
@@ -1946,7 +1975,7 @@ public sealed class MainForm : Form
         CellConfig updated;
         using (var dialog = new CellSettingsForm(index, _preset.Cells[index]))
         {
-            if (dialog.ShowDialog(this) != DialogResult.OK) return;
+            if (RunModal(() => dialog.ShowDialog(this)) != DialogResult.OK) return;
             updated = dialog.Result;
         }
 
@@ -2014,8 +2043,7 @@ public sealed class MainForm : Form
         }
 
         int dropped = ConfiguredCellsOutside(cols, rows);
-        if (dropped > 0 && MessageBox.Show(
-                this,
+        if (dropped > 0 && ShowMessage(
                 L.T($"격자를 {cols}×{rows}로 줄이면 설정된 셀 {dropped}개가 삭제됩니다.\n계속할까요?",
                     $"Shrinking the grid to {cols}×{rows} deletes {dropped} configured cell(s).\nContinue?"),
                 L.T("격자 크기", "Grid size"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes)
@@ -2064,8 +2092,7 @@ public sealed class MainForm : Form
     }
 
     private bool ConfirmDelete(int configured, string title) =>
-        configured == 0 || MessageBox.Show(
-            this,
+        configured == 0 || ShowMessage(
             L.T($"설정된 셀 {configured}개가 함께 삭제됩니다.\n계속할까요?",
                 $"{configured} configured cell(s) will be deleted with it.\nContinue?"),
             title, MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes;
@@ -2108,7 +2135,7 @@ public sealed class MainForm : Form
         DialogResult result;
         using (var dialog = new PresetManagerForm(_store))
         {
-            result = dialog.ShowDialog(this);
+            result = RunModal(() => dialog.ShowDialog(this));
             chosen = dialog.Selected;
         }
 
@@ -2148,7 +2175,7 @@ public sealed class MainForm : Form
 
 
     /// <summary>Minimal single-line text prompt; WinForms has no built-in one.</summary>
-    private static string? Prompt(string caption, string initial)
+    private string? Prompt(string caption, string initial)
     {
         using var form = new Form
         {
@@ -2166,7 +2193,7 @@ public sealed class MainForm : Form
         form.Controls.AddRange(new Control[] { box, ok, cancel });
         form.AcceptButton = ok;
         form.CancelButton = cancel;
-        return form.ShowDialog() == DialogResult.OK ? box.Text : null;
+        return RunModal(() => form.ShowDialog()) == DialogResult.OK ? box.Text : null;
     }
 
     // ------------------------------------------------------------------ shutdown
@@ -2256,11 +2283,16 @@ public sealed class MainForm : Form
     {
         // A set switched mid-pass has just loaded fresh; reloading it again would only blink.
         var preset = _preset;
+        if (!ReferenceEquals(preset, _recycleSet)) _recycleNext = 0;
+        _recycleSet = preset;
 
-        for (int i = 0; i < _cells.Count; i++)
+        // Resumes where a cut-short pass stopped, so a wall that keeps being zoomed still gets
+        // round to its last cells instead of reloading the first ones over and over.
+        for (int i = _recycleNext; i < _cells.Count; i++)
         {
+            _recycleNext = i;
             if (_closing || _interactive || _zoomed >= 0) return false;
-            if (!ReferenceEquals(preset, _preset)) return true;
+            if (!ReferenceEquals(preset, _preset)) { _recycleNext = 0; return true; }
             if (i >= _preset.Cells.Count || _preset.Cells[i].Kind != CellKind.Browser) continue;
             if (_preset.IsCovered(i)) continue;
             // A cell with its own interval refreshes on that; leave it alone.
@@ -2275,6 +2307,7 @@ public sealed class MainForm : Form
             catch { return false; }
         }
 
+        _recycleNext = 0;
         HealthMonitor.Sample("browser cells recycled");
         return true;
     }
@@ -2318,7 +2351,7 @@ public sealed class MainForm : Form
         bool restart;
         using (var dialog = new UpdateForm(S, _updates))
         {
-            dialog.ShowDialog(this);
+            RunModal(() => dialog.ShowDialog(this));
             if (dialog.SettingsChanged) _store.SaveSettings();
             restart = dialog.RestartRequested;
         }
