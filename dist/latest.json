@@ -1,7 +1,7 @@
-﻿{
-    "version":  "1.0.17",
-    "url":  "https://github.com/MinaryHub/GridDisplay/releases/download/v1.0.17/GridDisplay-1.0.17.zip",
-    "sha256":  "4FBDBC58C0F67A4E9E17B2234C26EF676E6CFAB2A754C44D76A8BCF6FC979625",
-    "notes":  "행·열 삽입/삭제(우클릭 › 삽입/삭제), 칸 사이 틈을 끌어 열 너비·행 높이 조정(두 번 클릭: 같게). / Insert and delete rows and columns (right-click › Insert/Delete); drag the gap between cells to resize columns and rows (double-click: equal).",
-    "published":  "2026-11-20"
+{
+  "version": "1.0.18",
+  "url": "https://github.com/MinaryHub/GridDisplay/releases/download/v1.0.18/GridDisplay-1.0.18.zip",
+  "sha256": "06551E2E2DB1EF629995CF9AABFE2CC537F8FEBC4ACF5E6996FB477FF28E5E93",
+  "notes": "업데이트 '지금 설치하고 다시 시작'이 적용되지 않던 문제, 창을 옮긴 뒤 클릭이 엉뚱하게 가던 문제, 세트 이름·크기 변경이 저장되지 않던 문제 등 버그 수정. 멈춘 프로그램 셀이 화면 전체를 멈추던 문제 해결, 성능 개선. / Bug fixes: 'Install now and restart' not applying, clicks going astray after moving the window, set renames and resizes not being saved. A hung program cell no longer freezes the wall; performance improvements.",
+  "published": "2026-11-28"
 }
