@@ -1,0 +1,69 @@
+# Build and publish a release on a Windows runner — the same tools\release.ps1 a release
+# machine runs by hand: stamp, publish, zip, hash, latest.json, Inno Setup installer, and the
+# GitHub release with all three assets. Then the dist\ files are committed back to main, as
+# the "chore: <version> release files" commits always have been.
+#
+# Started by hand (Actions › Release › Run workflow) with the version and the notes.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version, three parts (e.g. 1.0.18). Must match <Version> in the csproj.'
+        required: true
+      notes:
+        description: 'Release notes (Korean / English), shown in the in-app updater.'
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'Inno Setup install failed.' }
+
+      - name: Build and publish the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          NOTES: ${{ inputs.notes }}
+        run: |
+          # Passed through the environment, never pasted into the script: the notes are free text.
+          .\tools\release.ps1 -Version $env:VERSION -Notes $env:NOTES -Publish
+          # release.ps1 only warns when Inno Setup is missing; a release must carry the installer.
+          if (-not (Test-Path "dist\GridDisplay-Setup-$env:VERSION.exe")) { throw 'Installer was not built.' }
+
+      - name: Commit the release files
+        shell: pwsh
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          # dist\publish is ignored (publish/), so this takes the zip, installer and latest.json,
+          # and drops the previous version's files.
+          git add -A dist src/GridDisplay/GridDisplay.csproj
+          git diff --cached --quiet
+          if ($LASTEXITCODE -eq 0) { Write-Host 'Nothing to commit.'; exit 0 }
+          git commit -m "chore: $env:VERSION release files"
+          git push origin HEAD:main
